@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BOLT ENGINE — Spiral-47</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="boot">
+    <div class="boot-card">
+      <div class="boot-mark">⚡🐺</div>
+      <h1>BOLT ENGINE</h1>
+      <p class="subtitle">Spiral-47 · Infinite Open Cosmos</p>
+      <p class="tagline">No walls. Sprint forever — the world streams and reveals itself with purpose.</p>
+      <ul class="controls">
+        <li><kbd>W A S D</kbd> Move</li>
+        <li><kbd>Shift</kbd> Sprint (the fundamental force)</li>
+        <li><kbd>Space</kbd> Jump / boost chain</li>
+        <li><kbd>Mouse</kbd> Look · <kbd>H</kbd> Howl (Resonance burst)</li>
+        <li><kbd>R</kbd> Recall to Citadel · <kbd>H</kbd> Howl · <kbd>L</kbd> Decrees · <kbd>J</kbd> Quest · <kbd>P</kbd> Progress · <kbd>M</kbd> Mute</li>
+      </ul>
+      <button id="start-btn" type="button">AROOOO — ENTER THE BOLTVERSE</button>
+      <p class="powered">Powered by xAI &amp; YOU · Prototype build</p>
+      <p id="load-status" class="powered">Loading Three.js…</p>
+    </div>
+  </div>
+
+  <div id="hud" class="hidden">
+    <div class="hud-top">
+      <div class="brand">BOLT ENGINE <span>v1.4 · FLANKS</span></div>
+      <div id="scale-badge" class="scale-badge scale-paw" aria-live="polite">
+        <span class="scale-badge-label">SCALE</span>
+        <span class="scale-badge-name" id="scale-badge-name">PAW</span>
+        <span class="scale-badge-meta" id="scale-badge-meta">surface · dense</span>
+      </div>
+      <!-- Companion planet navigation — distance / time to land -->
+      <div id="planet-nav" class="planet-nav hidden" aria-live="polite">
+        <div class="planet-nav-label">TARGET WORLD</div>
+        <div class="planet-nav-name" id="planet-nav-name">—</div>
+        <div class="planet-nav-bar"><i id="planet-nav-fill"></i></div>
+        <div class="planet-nav-meta">
+          <span id="planet-nav-dist">—</span>
+          <span id="planet-nav-eta">—</span>
+        </div>
+        <div class="planet-nav-status" id="planet-nav-status">Sprint toward the beacon</div>
+      </div>
+      <div class="packet" id="packet">
+        <div class="meter">
+          <label>SPRINT</label>
+          <div class="bar"><i id="bar-sprint"></i></div>
+          <span id="val-speed">0</span>
+        </div>
+        <div class="meter">
+          <label>MOMENTUM</label>
+          <div class="bar"><i id="bar-momentum"></i></div>
+          <span id="val-momentum">0%</span>
+        </div>
+        <div class="meter">
+          <label>INTENTION</label>
+          <div class="bar"><i id="bar-intention"></i></div>
+          <span id="val-intention">—</span>
+        </div>
+        <div class="meter meaningful">
+          <label>MEANINGFUL</label>
+          <div class="bar"><i id="bar-meaningful"></i></div>
+          <span id="val-meaningful">0%</span>
+        </div>
+        <div class="meter core" id="meter-core">
+          <label>STAR CORE <em id="val-core-stage">SPARK</em></label>
+          <div class="bar"><i id="bar-core"></i></div>
+          <span id="val-core">0%</span>
+        </div>
+        <div class="meter">
+          <label>RESONANCE</label>
+          <div class="bar"><i id="bar-resonance"></i></div>
+          <span id="val-resonance">0%</span>
+        </div>
+      </div>
+    </div>
+    <div class="hud-bottom">
+      <div id="toast"></div>
+      <div id="gate-banner" class="gate-banner hidden"></div>
+      <div id="spawn-stats" class="spawn-stats"></div>
+      <div class="hint"><kbd>R</kbd> Recall · <kbd>Shift+Space</kbd> ascent · Scroll / <kbd>[</kbd><kbd>]</kbd> zoom · H howl</div>
+    </div>
+    <div id="crosshair"></div>
+    <div id="gate-flash" class="gate-flash"></div>
+    <div id="pack-flash" class="pack-flash"></div>
+    <div id="landmark-markers" class="landmark-markers" aria-hidden="true"></div>
+    <div id="pack-banner" class="pack-banner hidden"></div>
+
+    <!-- Active mini-quest -->
+    <aside id="quest-panel" class="quest-panel" aria-label="Active Quest">
+      <div class="quest-head">
+        <span class="quest-tag">DECREE QUEST</span>
+        <span id="quest-progress">0/1</span>
+      </div>
+      <div id="quest-title" class="quest-title">—</div>
+      <div id="quest-desc" class="quest-desc">Sprint with purpose to receive a quest.</div>
+      <div class="quest-bar"><i id="quest-bar"></i></div>
+    </aside>
+
+    <!-- Decree Log — Spiral-47 memory fragments -->
+    <aside id="decree-panel" class="decree-panel hidden" aria-label="Decree Log">
+      <div class="decree-head">
+        <h3>DECREE LOG</h3>
+        <span id="decree-count">0 / 0</span>
+        <button type="button" id="decree-close" class="decree-close" title="Close (L)">×</button>
+      </div>
+      <p class="decree-sub">Fragments of Spiral-47 history · recovered from ruins</p>
+      <ul id="decree-list" class="decree-list">
+        <li class="decree-empty">No decrees yet. Sprint with purpose. Touch ruins. Recover the past.</li>
+      </ul>
+    </aside>
+
+    <!-- Lifetime progress (save) -->
+    <aside id="progress-panel" class="progress-panel hidden" aria-label="Progress">
+      <div class="decree-head">
+        <h3>PACK MEMORY</h3>
+        <button type="button" id="progress-close" class="decree-close" title="Close (P)">×</button>
+      </div>
+      <p class="decree-sub">Spiral-47 remembers across runs · auto-saved</p>
+      <ul id="progress-list" class="progress-list"></ul>
+    </aside>
+  </div>
+
+  <div id="pause" class="hidden">
+    <div class="pause-card">
+      <h2>PAUSED</h2>
+      <p>Sprint data frozen. The universe waits.</p>
+      <div id="pause-stats" class="pause-stats"></div>
+      <p class="pause-hint"><kbd>P</kbd> Pack Memory · <kbd>L</kbd> Decrees · Gate ≥65%</p>
+      <button id="resume-btn" type="button">RESUME SPRINT</button>
+    </div>
+  </div>
+
+  <canvas id="c"></canvas>
+
+  <!-- Local Three.js — no CDN / internet required -->
+  <script src="js/three.min.js"></script>
+  <script src="js/graphics.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/citadel.js"></script>
+  <script src="js/procedural.js"></script>
+  <script src="js/debris.js"></script>
+  <script src="js/trail.js"></script>
+  <script src="js/openworld.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
