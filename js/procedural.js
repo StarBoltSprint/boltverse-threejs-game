@@ -5355,18 +5355,23 @@
             }
             pos.x += pushX;
             pos.z += pushZ;
+            // Extra unstick nudge so Bolt never freezes inside overlapping colliders
+            if (Math.abs(pushX) + Math.abs(pushZ) > 0.001) {
+              pos.x += pushX * 0.15;
+              pos.z += pushZ * 0.15;
+            }
             if (vel) {
-              // Kill velocity into the wall
+              // Slide along wall — don't reverse/bounce (felt like freezing on weak PCs)
               if (pushX !== 0) {
                 if (pushX * vel.x < 0) {
                   impact = Math.max(impact, Math.abs(vel.x));
-                  vel.x *= -0.15;
+                  vel.x = 0;
                 }
               }
               if (pushZ !== 0) {
                 if (pushZ * vel.z < 0) {
                   impact = Math.max(impact, Math.abs(vel.z));
-                  vel.z *= -0.15;
+                  vel.z = 0;
                 }
               }
             }

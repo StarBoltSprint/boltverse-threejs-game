@@ -2812,10 +2812,29 @@
     }
   }
 
+  // Cache ground samples — heightAt is noisy/expensive; low-end PCs hit this every tick
+  let _ghCacheX = NaN;
+  let _ghCacheZ = NaN;
+  let _ghCacheY = 0;
+  let _ghCacheT = 0;
   function groundHeightAt(x, z) {
     // Infinite open-world surface + climbable structure tops
     const py = player && player.position ? player.position.y : 0;
-    let best = openWorld.heightAt(x, z);
+    // Reuse if barely moved (stops freeze spikes from full height recompute)
+    const now = performance.now();
+    if (
+      Math.abs(x - _ghCacheX) < 0.35 &&
+      Math.abs(z - _ghCacheZ) < 0.35 &&
+      now - _ghCacheT < 80
+    ) {
+      // still merge walk tops below with cached surface base
+    } else {
+      _ghCacheX = x;
+      _ghCacheZ = z;
+      _ghCacheT = now;
+      _ghCacheY = openWorld.heightAt(x, z);
+    }
+    let best = _ghCacheY;
     // Static pads / citadel / starter platforms — only if player can reach the top
     for (let i = 0; i < colliders.length; i++) {
       const c = colliders[i];
@@ -2827,7 +2846,8 @@
       }
     }
     // Procedural ruins / terrain walk tops (temples, platforms, boulder fields…)
-    if (spawner && spawner.sampleWalkTop) {
+    // Skip on laggy frames — AABB scans are expensive and caused freeze hitching
+    if (!state._laggy && spawner && spawner.sampleWalkTop) {
       const top = spawner.sampleWalkTop(x, z, py);
       if (top != null && top > best) best = top;
     }
@@ -3501,11 +3521,19 @@
 
   // ---------------------------------------------------------------------------
   // Update
+  // flags.physics — movement / gravity / walls (fixed-step on slow PCs)
+  // flags.world   — streaming, PCG, HUD, polish (once per rendered frame)
   // ---------------------------------------------------------------------------
-  function updatePlayer(dt) {
-    // Apply mouse look once per tick (stable on high-DPI / multi-event machines)
-    applyLookInput();
+  function updatePlayer(dt, flags) {
+    flags = flags || {};
+    const doPhysics = flags.physics !== false;
+    const doWorld = flags.world !== false;
+    // Apply mouse look once per display frame
+    if (doWorld) applyLookInput();
 
+    let h2 = Math.hypot(state.vel.x, state.vel.z);
+
+    if (doPhysics) {
     const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const right = new THREE.Vector3(Math.sin(yaw + Math.PI / 2), 0, Math.cos(yaw + Math.PI / 2));
 
@@ -3521,7 +3549,8 @@
     state.wishX = wish.x;
     state.wishZ = wish.z;
 
-    const baseAcc = state.sprinting ? 38 : 18;
+    // Slightly snappier accel so low-end catch-up still feels alive
+    const baseAcc = state.sprinting ? 42 : 20;
     const momBonus = 1 + state.momentum * 1.4 + state.resonance * 0.5;
     const acc = baseAcc * momBonus;
 
@@ -3531,9 +3560,10 @@
     }
 
     const horiz = Math.hypot(state.vel.x, state.vel.z);
+    // Lower sprint friction — old 2.2 ate speed when dt/FPS was uneven
     const friction = state.onGround
-      ? (state.sprinting ? 2.2 : 8.5)
-      : (state.sprinting ? 0.6 : 1.4);
+      ? (state.sprinting ? 1.4 : 8.5)
+      : (state.sprinting ? 0.45 : 1.4);
     if (horiz > 0.01) {
       const f = Math.max(0, 1 - friction * dt);
       state.vel.x *= f;
@@ -3543,8 +3573,8 @@
       state.vel.z = 0;
     }
 
-    const maxSpeed = (state.sprinting ? 28 : 12) * (1 + state.momentum * 0.85 + state.resonance * 0.4);
-    const h2 = Math.hypot(state.vel.x, state.vel.z);
+    const maxSpeed = (state.sprinting ? 30 : 12) * (1 + state.momentum * 0.85 + state.resonance * 0.4);
+    h2 = Math.hypot(state.vel.x, state.vel.z);
     if (h2 > maxSpeed) {
       const s = maxSpeed / h2;
       state.vel.x *= s;
@@ -3653,11 +3683,14 @@
       updatePlayer._wallToastT -= dt;
     }
 
+    h2 = Math.hypot(state.vel.x, state.vel.z);
+    } // end doPhysics
+
     // Horizontal speed (needed early for debris / assists — do not use before this line)
     const speedNow = Math.hypot(state.vel.x, state.vel.z);
 
-    // --- Orbital Debris: physics + player interaction ---
-    if (orbitalDebris && !planetMotion) {
+    // --- Orbital Debris: physics + player interaction (once per display frame) ---
+    if (doWorld && orbitalDebris && !state.planetLand) {
       const stScale = state.scaleStage || "paw";
       const inOrbit =
         stScale === "orbital" || stScale === "solar" || stScale === "cosmic";
@@ -3727,48 +3760,48 @@
       }
     }
 
-    // Stream infinite chunks under Bolt
-    openWorld.ensureAround(player.position.x, player.position.z, {
-      vx: state.vel.x,
-      vz: state.vel.z,
-      lookYaw: yaw,
-      // Bake into NEW chunks only — mild height/detail at high meaningful sprint
-      sprintScore: state.meaningfulScore || 0,
-    });
+    // Stream / atmosphere / particles — once per frame (heavy; never multi-step)
+    if (doWorld) {
+      openWorld.ensureAround(player.position.x, player.position.z, {
+        vx: state.vel.x,
+        vz: state.vel.z,
+        lookYaw: yaw,
+        sprintScore: state.meaningfulScore || 0,
+      });
 
-    // Biome atmosphere (fog / lights) — sky dome keeps nebula art
-    biomeAtmo.update(
-      player.position.x,
-      player.position.z,
-      state.resonance,
-      dt,
-      scene,
-      { ambient: ambient, sun: sun, rim: rim, fill: lights.fill }
-    );
-    // Dim biome zenith as clear color (matches dome; not fixed cool-blue void)
-    if (scene.background && scene.background.isColor) {
-      scene.background.copy(biomeAtmo.sky).multiplyScalar(0.35);
-    } else {
-      scene.background = biomeAtmo.sky.clone().multiplyScalar(0.35);
-    }
-
-    // Soft particles follow Bolt + biome tint
-    softParticles.follow(player.position.x, player.position.z);
-    softParticles.setColor(biomeAtmo.rim);
-
-    // Reactive sky follows camera (dome + nebulae + gate/lightning)
-    if (skyDome && !reactiveSky) {
-      skyDome.position.copy(camera.position);
-    }
-    // Horizon atmospheric haze
-    if (horizonHaze && horizonHaze.update) {
-      horizonHaze.update(
-        player.position,
-        state.scaleStage,
-        (state.scaleProps && state.scaleProps.skyDark) || 0
+      biomeAtmo.update(
+        player.position.x,
+        player.position.z,
+        state.resonance,
+        dt,
+        scene,
+        { ambient: ambient, sun: sun, rim: rim, fill: lights.fill }
       );
+      if (scene.background && scene.background.isColor) {
+        scene.background.copy(biomeAtmo.sky).multiplyScalar(0.35);
+      } else {
+        scene.background = biomeAtmo.sky.clone().multiplyScalar(0.35);
+      }
+
+      if (softParticles && softParticles.points && softParticles.points.visible) {
+        softParticles.follow(player.position.x, player.position.z);
+        softParticles.setColor(biomeAtmo.rim);
+      }
+
+      if (skyDome && !reactiveSky) {
+        skyDome.position.copy(camera.position);
+      }
+      if (horizonHaze && horizonHaze.update && !state._laggy) {
+        horizonHaze.update(
+          player.position,
+          state.scaleStage,
+          (state.scaleProps && state.scaleProps.skyDark) || 0
+        );
+      }
     }
 
+    // Ground snap + facing every physics step
+    if (doPhysics) {
     const gh = groundHeightAt(player.position.x, player.position.z);
     // Don't snap to flat ground while mid planet-land cinematic
     if (!state.planetLand) {
@@ -3779,16 +3812,16 @@
         const impactY = fallSpeed;
         player.position.y = gh;
         state.vel.y = 0;
-        if (wasAir && impactY > 9) {
+        if (doWorld && wasAir && impactY > 9) {
           punchCam(0.1 + Math.min(0.25, impactY * 0.012), 2);
           if (impactY > 16 && (!updatePlayer._landToastT || updatePlayer._landToastT <= 0)) {
             toast("LANDING IMPACT ⚡", 900);
             updatePlayer._landToastT = 1.2;
           }
         }
-        if (wasAir && state.ascentCommit && !state.currentPlanet) {
+        if (doWorld && wasAir && state.ascentCommit && !state.currentPlanet) {
           toast("SURFACE RETURN — paw scale · sprint+jump again to ascend", 2400, "lore");
-        } else if (wasAir && state.ascentCommit && state.currentPlanet) {
+        } else if (doWorld && wasAir && state.ascentCommit && state.currentPlanet) {
           toast(
             "TOUCHDOWN — " + (state.currentPlanet.short || state.currentPlanet.name),
             2200,
@@ -3801,7 +3834,7 @@
         player.position.y = gh + 5;
         state.vel.y = 0;
         state.ascentCommit = false;
-        toast("LIGHTNING CORE — STABILIZED");
+        if (doWorld) toast("LIGHTNING CORE — STABILIZED");
       } else {
         state.onGround = false;
       }
@@ -3810,24 +3843,33 @@
     // NO radius walls — open world
 
     // Face where Bolt runs / steers (mesh is Z-forward; matches camera yaw)
-    // note: h2 is speed magnitude (hypot), not squared
-    const moveSpeed = h2;
+    h2 = Math.hypot(state.vel.x, state.vel.z);
+    const moveSpeedPhys = h2;
     const moveYaw = Math.atan2(state.vel.x, state.vel.z);
     const wishLen = Math.hypot(state.wishX || 0, state.wishZ || 0);
     const wishYaw = wishLen > 0.01 ? Math.atan2(state.wishX, state.wishZ) : yaw;
     let targetYaw = yaw;
-    if (state.sprinting && (moveSpeed > 0.8 || wishLen > 0.01)) {
+    if (state.sprinting && (moveSpeedPhys > 0.8 || wishLen > 0.01)) {
       // Sprint: hard face into movement (or wish if still accelerating)
-      targetYaw = moveSpeed > 1.2 ? moveYaw : wishYaw;
-    } else if (moveSpeed > 1.5) {
+      targetYaw = moveSpeedPhys > 1.2 ? moveYaw : wishYaw;
+    } else if (moveSpeedPhys > 1.5) {
       targetYaw = moveYaw;
     } else if (wishLen > 0.01) {
       targetYaw = wishYaw;
     } else {
       targetYaw = yaw; // idle: face camera look direction
     }
-    const turnSpeed = state.sprinting ? 16 : moveSpeed > 2 ? 12 : 9;
+    const turnSpeed = state.sprinting ? 16 : moveSpeedPhys > 2 ? 12 : 9;
     boltMesh.rotation.y = dampAngle(boltMesh.rotation.y, targetYaw, turnSpeed, dt);
+    state._targetYaw = targetYaw;
+    state._moveSpeed = moveSpeedPhys;
+    } // end ground/face physics
+
+    // Physics-only catch-up steps stop here (keeps sprint speed stable on slow PCs)
+    if (!doWorld) return;
+
+    const moveSpeed = state._moveSpeed != null ? state._moveSpeed : Math.hypot(state.vel.x, state.vel.z);
+    const targetYaw = state._targetYaw != null ? state._targetYaw : yaw;
 
     // Procedural life: gallop, head, ears, tail, core, rim (Bolt polish 4–7)
     const tAnim = performance.now() * 0.001;
@@ -4973,17 +5015,55 @@
   const _furWhite = new THREE.Color(0xffffff);
   const _furEmTmp = new THREE.Color();
 
+  // Fixed-step physics — on low FPS, old code capped dt at 0.05 and only ran once
+  // per frame → Bolt crawled. We catch up with multiple 1/60 steps instead.
+  const PHYS_DT = 1 / 60;
+  const PHYS_MAX_STEPS = 5;
+  let simAccumulator = 0;
+  let fpsSmooth = 60;
+  let lowFpsStreak = 0;
+
   function frame() {
     requestAnimationFrame(frame);
     // Free GPU: do not render or simulate while the tab is in the background
     if (!pageVisible) return;
 
-    const dt = Math.min(clock.getDelta(), 0.05);
+    let rawDt = clock.getDelta();
+    if (!isFinite(rawDt) || rawDt < 0) rawDt = PHYS_DT;
+    // After alt-tab / long hitch, don't dump a huge step
+    if (rawDt > 0.25) rawDt = 0.25;
+
+    const instFps = rawDt > 1e-5 ? 1 / rawDt : 60;
+    fpsSmooth = fpsSmooth * 0.92 + instFps * 0.08;
+    if (fpsSmooth < 24) lowFpsStreak++;
+    else lowFpsStreak = Math.max(0, lowFpsStreak - 3);
+    const laggy = lowFpsStreak > 25;
+    state._laggy = laggy;
+    state._fps = fpsSmooth;
+
     const t = clock.elapsedTime;
 
     if (started && !paused) {
       try {
-        updatePlayer(dt);
+        simAccumulator += rawDt;
+        let steps = 0;
+        // Catch up physics so sprint distance matches real time even at 15–25 FPS
+        const maxSteps = laggy ? PHYS_MAX_STEPS : Math.min(PHYS_MAX_STEPS, 4);
+        while (simAccumulator >= PHYS_DT && steps < maxSteps) {
+          updatePlayer(PHYS_DT, { physics: true, world: false });
+          simAccumulator -= PHYS_DT;
+          steps++;
+        }
+        // Drop residual if still behind (prevent spiral of death)
+        if (simAccumulator > PHYS_DT * 3) simAccumulator = 0;
+        // If frame was tiny and no step ran, still do one physics tick
+        if (steps === 0) {
+          updatePlayer(Math.min(rawDt, PHYS_DT), { physics: true, world: false });
+        }
+
+        // World systems once per frame (no second physics pass)
+        const worldDt = Math.min(Math.max(rawDt, PHYS_DT), 0.05);
+        updatePlayer(worldDt, { physics: false, world: true });
       } catch (errFrame) {
         console.error("updatePlayer", errFrame);
         // Emergency camera: stay on Bolt so the game remains playable
@@ -5001,16 +5081,21 @@
         }
       }
     } else if (!started) {
+      simAccumulator = 0;
       camera.position.set(Math.sin(t * 0.15) * 35, 18, Math.cos(t * 0.15) * 35);
       camera.lookAt(0, 8, 0);
       if (starCoreGroup) starCoreGroup.rotation.y = t * 0.3;
     }
 
     // Boot orbit only needs light work; in-game skip nebula spin when paused
-    if (!paused) animateWorld(t);
+    if (!paused && !laggy) animateWorld(t);
+    else if (!paused && laggy && starCoreGroup) {
+      // Minimal boot motion when lagging
+      starCoreGroup.rotation.y = t * 0.2;
+    }
 
-    // Selective energy bloom (cyan trails/eyes) — not full-screen white wash
-    if (bloom && bloom.render) {
+    // Skip bloom when FPS is struggling (keeps Bolt responsive)
+    if (bloom && bloom.render && !laggy && GraphicsQuality && GraphicsQuality.bloom) {
       bloom.render();
     } else {
       renderer.render(scene, camera);
@@ -5019,7 +5104,7 @@
 
   frame();
   console.log(
-    "%cBOLT ENGINE v2.5 · perf pass — Low/Med stay smooth, High/MAX keep fidelity",
+    "%cBOLT ENGINE v2.5 · fixed-step movement — sprint stays responsive on low-end PCs",
     "color:#34d399;font-weight:bold"
   );
   } catch (err) {
