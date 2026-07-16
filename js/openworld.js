@@ -17,6 +17,9 @@
   let GROUND_SEGS = 44;   // heightfield density
   let DRESS_MUL = 1.1;    // ground dressing density
   const MAX_CHUNKS = 80;
+  /** GPU vertex displacement for ground (option 4). Low tier can force CPU bake only. */
+  let GPU_HEIGHT = true;
+  let GPU_OCTAVES = 4; // 3–5; more = prettier + more GPU cost
 
   /** Scale definitions (lore order) */
   const SCALE_STAGES = [
@@ -208,68 +211,374 @@
     return props;
   }
 
+  /** Fast 0..1 seed for dressing / random (not terrain lattice) */
   function hash2(x, z) {
     const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
     return s - Math.floor(s);
   }
-  function fbm(x, z) {
-    let v = 0, a = 0.5, f = 1;
-    for (let i = 0; i < 5; i++) {
-      const s = Math.sin(x * f * 12.9898 + z * f * 78.233) * 43758.5453;
-      v += a * (s - Math.floor(s));
-      a *= 0.5;
-      f *= 2.1;
-    }
-    return v;
+
+  /**
+   * Lattice hash → 0..1 — same formula as GLSL (sin/fract) so CPU heightAt ≈ GPU mesh.
+   */
+  function latticeHash(ix, iz) {
+    const s = Math.sin(ix * 127.1 + iz * 311.7) * 43758.5453123;
+    return s - Math.floor(s);
   }
-  /** Ridged multifractal — sharp crests for ember / alpine */
-  function ridgeFbm(x, z) {
-    let v = 0, a = 0.5, f = 1;
-    for (let i = 0; i < 5; i++) {
-      const s = Math.sin(x * f * 12.9898 + z * f * 78.233) * 43758.5453;
-      const n = s - Math.floor(s);
-      const r = 1 - Math.abs(n * 2 - 1);
-      v += a * r * r;
-      a *= 0.5;
-      f *= 2.15;
+
+  /** Biome → GPU uniform id (must match GLSL boltHeightProfile) */
+  const BIOME_GPU_ID = {
+    crystalNebula: 0,
+    emberVoid: 1,
+    whisperStars: 2,
+    frostGlacier: 3,
+    jadeCanopy: 4,
+    solarGold: 5,
+    rosePulse: 6,
+  };
+
+  /**
+   * GLSL noise + terrain height — mirrors JS valueNoise / fbm / ridge / domainWarp / profiles.
+   * Fixed loop counts for WebGL; uBoltOctaves scales how many octaves contribute.
+   */
+  const GLSL_TERRAIN_NOISE = [
+    "uniform float uBoltSprint;",
+    "uniform float uBoltHeightMul;",
+    "uniform float uBoltBiome;",
+    "uniform float uBoltOctaves;",
+    "float boltHash(float ix, float iz) {",
+    "  return fract(sin(ix * 127.1 + iz * 311.7) * 43758.5453123);",
+    "}",
+    "float boltValueNoise(vec2 p) {",
+    "  vec2 i = floor(p);",
+    "  vec2 f = fract(p);",
+    "  float u = f.x * f.x * f.x * (f.x * (f.x * 6.0 - 15.0) + 10.0);",
+    "  float v = f.y * f.y * f.y * (f.y * (f.y * 6.0 - 15.0) + 10.0);",
+    "  float a = boltHash(i.x, i.y);",
+    "  float b = boltHash(i.x + 1.0, i.y);",
+    "  float c = boltHash(i.x, i.y + 1.0);",
+    "  float d = boltHash(i.x + 1.0, i.y + 1.0);",
+    "  return mix(mix(a, b, u), mix(c, d, u), v);",
+    "}",
+    "float boltFbm(vec2 p, float maxOct) {",
+    "  float val = 0.0;",
+    "  float amp = 1.0;",
+    "  float freq = 1.0;",
+    "  float mx = 0.0;",
+    "  for (int i = 0; i < 5; i++) {",
+    "    float fi = float(i);",
+    "    float w = step(fi, maxOct - 0.5);",
+    "    val += w * amp * boltValueNoise(p * freq);",
+    "    mx += w * amp;",
+    "    amp *= 0.5;",
+    "    freq *= 2.03;",
+    "  }",
+    "  return mx > 0.0 ? val / mx : 0.0;",
+    "}",
+    "float boltRidge(vec2 p, float maxOct) {",
+    "  float val = 0.0;",
+    "  float amp = 1.0;",
+    "  float freq = 1.0;",
+    "  float mx = 0.0;",
+    "  float weight = 1.0;",
+    "  for (int i = 0; i < 5; i++) {",
+    "    float fi = float(i);",
+    "    float w = step(fi, maxOct - 0.5);",
+    "    float n = boltValueNoise(p * freq);",
+    "    n = 1.0 - abs(n * 2.0 - 1.0);",
+    "    n *= n;",
+    "    n *= weight;",
+    "    weight = clamp(n * 1.85, 0.0, 1.0);",
+    "    val += w * n * amp;",
+    "    mx += w * amp;",
+    "    amp *= 0.5;",
+    "    freq *= 2.07;",
+    "  }",
+    "  return mx > 0.0 ? val / mx : 0.0;",
+    "}",
+    "vec2 boltDomainWarp(vec2 p, float strength) {",
+    "  float o = min(uBoltOctaves, 4.0);",
+    "  float w1 = boltFbm(p * 0.009 + vec2(3.1, 1.7), o) - 0.5;",
+    "  float w2 = boltFbm(p * 0.009 + vec2(19.4, 7.2), o) - 0.5;",
+    "  vec2 p1 = p + vec2(w1, w2) * strength * 2.0;",
+    "  float w3 = boltFbm(p1 * 0.014 + vec2(41.0, 9.0), min(o, 3.0)) - 0.5;",
+    "  float w4 = boltFbm(p1 * 0.014 + vec2(8.0, 33.0), min(o, 3.0)) - 0.5;",
+    "  return p + vec2(w1, w2) * strength * 2.0 + vec2(w3, w4) * strength * 0.65;",
+    "}",
+    "float boltHeightProfile(float biome, vec2 p, float macro, float mid, float micro, float detailMul) {",
+    "  if (biome < 0.5) {", // crystalNebula + domain warp
+    "    vec2 w = boltDomainWarp(p, 16.0);",
+    "    float cMacro = boltFbm(w * 0.0072, uBoltOctaves);",
+    "    float cMid = boltFbm(w * 0.024 + vec2(17.0, 0.0), min(uBoltOctaves, 4.0));",
+    "    float cMicro = boltFbm(w * 0.078 + vec2(41.0, 0.0), min(uBoltOctaves, 3.0));",
+    "    float cRidge = boltRidge(w * 0.012, min(uBoltOctaves, 4.0));",
+    "    return cMacro * 3.35 + cMid * 1.9 + cMicro * 0.55 * detailMul + cRidge * 1.05;",
+    "  } else if (biome < 1.5) {", // ember
+    "    return boltRidge(p * 0.018, uBoltOctaves) * 5.2 + mid * 1.9 + micro * 0.45 * detailMul;",
+    "  } else if (biome < 2.5) {", // whisper
+    "    return macro * 1.35 + mid * 0.75 + micro * 0.28 * detailMul;",
+    "  } else if (biome < 3.5) {", // frost
+    "    return macro * 4.2 + pow(max(0.01, mid), 1.35) * 2.8 + micro * 0.55 * detailMul;",
+    "  } else if (biome < 4.5) {", // jade
+    "    return macro * 3.0 + mid * 1.75 + micro * 0.5 * detailMul;",
+    "  } else if (biome < 5.5) {", // solar
+    "    return sin(macro * 3.14159265 * 2.0) * 1.35 + mid * 2.4 + micro * 0.4 * detailMul;",
+    "  }",
+    "  return macro * 2.9 + mid * 1.7 + micro * 0.48 * detailMul;", // rose
+    "}",
+    "float boltTerrainHeight(vec2 worldXZ) {",
+    "  float score = clamp(uBoltSprint, 0.0, 1.25);",
+    "  float ampMul = 1.0 + score * 0.2;",
+    "  float detailMul = 1.0 + score * 0.42;",
+    "  float macro = boltFbm(worldXZ * 0.0075, uBoltOctaves);",
+    "  float mid = boltFbm(worldXZ * 0.026 + vec2(17.0, 0.0), min(uBoltOctaves, 4.0));",
+    "  float micro = boltFbm(worldXZ * 0.085 + vec2(41.0, 0.0), min(uBoltOctaves, 3.0));",
+    "  float h = boltHeightProfile(uBoltBiome, worldXZ, macro, mid, micro, detailMul);",
+    "  // Match JS: hash2(x*0.55, z*0.55)",
+    "  float grit = (fract(sin(worldXZ.x * 0.55 * 127.1 + worldXZ.y * 0.55 * 311.7) * 43758.5453123) - 0.5)",
+    "             * (0.22 + score * 0.12);",
+    "  return (h + grit) * uBoltHeightMul * ampMul;",
+    "}",
+  ].join("\n");
+
+  /**
+   * Inject GPU height displacement into a MeshStandardMaterial (keeps maps / PBR lighting).
+   * Score is baked into uniforms at chunk build — does not morph under Bolt every frame.
+   */
+  function applyGpuTerrainMaterial(mat, opts) {
+    opts = opts || {};
+    const score = opts.score != null ? opts.score : 0;
+    const biomeId = opts.biomeId || "crystalNebula";
+    const biomeGpu = BIOME_GPU_ID[biomeId] != null ? BIOME_GPU_ID[biomeId] : 0;
+    let heightMul = 1;
+    if (
+      global.BoltProcedural &&
+      global.BoltProcedural.BIOMES &&
+      global.BoltProcedural.BIOMES[biomeId] &&
+      global.BoltProcedural.BIOMES[biomeId].heightMul != null
+    ) {
+      heightMul = global.BoltProcedural.BIOMES[biomeId].heightMul;
     }
-    return v;
+    const octaves = opts.octaves != null ? opts.octaves : GPU_OCTAVES;
+
+    const uSprint = { value: score };
+    const uBiome = { value: biomeGpu };
+    const uHMul = { value: heightMul };
+    const uOct = { value: Math.max(2, Math.min(5, octaves)) };
+
+    mat.userData.boltGpuTerrain = true;
+    mat.userData.boltGpuUniforms = {
+      uBoltSprint: uSprint,
+      uBoltBiome: uBiome,
+      uBoltHeightMul: uHMul,
+      uBoltOctaves: uOct,
+    };
+
+    mat.onBeforeCompile = function (shader) {
+      shader.uniforms.uBoltSprint = uSprint;
+      shader.uniforms.uBoltBiome = uBiome;
+      shader.uniforms.uBoltHeightMul = uHMul;
+      shader.uniforms.uBoltOctaves = uOct;
+
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <common>",
+        "#include <common>\n" + GLSL_TERRAIN_NOISE
+      );
+
+      // Displace after begin_vertex; recompute normals for lighting/shadows
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <begin_vertex>",
+        [
+          "#include <begin_vertex>",
+          "vec4 boltWorld = modelMatrix * vec4(transformed, 1.0);",
+          "vec2 boltWxz = boltWorld.xz;",
+          "float boltH = boltTerrainHeight(boltWxz);",
+          "transformed.y = boltH;",
+        ].join("\n")
+      );
+
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <defaultnormal_vertex>",
+        [
+          "{",
+          "  float e = 0.85;",
+          "  float hL = boltTerrainHeight(boltWxz + vec2(-e, 0.0));",
+          "  float hR = boltTerrainHeight(boltWxz + vec2( e, 0.0));",
+          "  float hD = boltTerrainHeight(boltWxz + vec2(0.0, -e));",
+          "  float hU = boltTerrainHeight(boltWxz + vec2(0.0,  e));",
+          "  objectNormal = normalize(vec3(hL - hR, 2.0 * e, hD - hU));",
+          "}",
+          "#include <defaultnormal_vertex>",
+        ].join("\n")
+      );
+
+      mat.userData.shader = shader;
+    };
+
+    mat.customProgramCacheKey = function () {
+      return "boltGpuTerrain_v1_o" + Math.floor(uOct.value);
+    };
+    mat.needsUpdate = true;
+    return mat;
+  }
+
+  /** Quintic smoothstep — fewer grid artifacts than cubic (closer to Simplex feel) */
+  function fade5(t) {
+    return t * t * t * (t * (t * 6 - 15) + 10);
+  }
+
+  /**
+   * Smooth interpolated value noise (CPU).
+   * Continuous across the plane — used for terrain height, not GPU Simplex.
+   */
+  function valueNoise(x, z) {
+    const x0 = Math.floor(x);
+    const z0 = Math.floor(z);
+    const fx = x - x0;
+    const fz = z - z0;
+    const u = fade5(fx);
+    const v = fade5(fz);
+    const a = latticeHash(x0, z0);
+    const b = latticeHash(x0 + 1, z0);
+    const c = latticeHash(x0, z0 + 1);
+    const d = latticeHash(x0 + 1, z0 + 1);
+    const ab = a + (b - a) * u;
+    const cd = c + (d - c) * u;
+    return ab + (cd - ab) * v;
+  }
+
+  /**
+   * Fractal Brownian Motion — normalized ~0..1
+   * lacunarity slightly ≠ 2 reduces lattice ringing.
+   */
+  function fbm(x, z, octaves, persistence, lacunarity) {
+    octaves = octaves != null ? octaves : 5;
+    persistence = persistence != null ? persistence : 0.5;
+    lacunarity = lacunarity != null ? lacunarity : 2.03;
+    let v = 0;
+    let a = 1;
+    let f = 1;
+    let max = 0;
+    for (let i = 0; i < octaves; i++) {
+      v += a * valueNoise(x * f, z * f);
+      max += a;
+      a *= persistence;
+      f *= lacunarity;
+    }
+    return max > 0 ? v / max : 0;
+  }
+
+  /** Ridged multifractal — sharp crests for ember / alpine (~0..1) */
+  function ridgeFbm(x, z, octaves) {
+    octaves = octaves != null ? octaves : 5;
+    let v = 0;
+    let a = 1;
+    let f = 1;
+    let max = 0;
+    let weight = 1;
+    for (let i = 0; i < octaves; i++) {
+      let n = valueNoise(x * f, z * f);
+      n = 1 - Math.abs(n * 2 - 1); // invert ridges
+      n *= n; // sharpen
+      n *= weight;
+      weight = Math.min(1, Math.max(0, n * 1.85));
+      v += n * a;
+      max += a;
+      a *= 0.5;
+      f *= 2.07;
+    }
+    return max > 0 ? v / max : 0;
+  }
+
+  /**
+   * Domain warping — organic twist for Crystal Nebula.
+   * strength in world units of displacement.
+   */
+  function domainWarp(x, z, strength) {
+    const s = strength != null ? strength : 18;
+    const w1 = fbm(x * 0.009 + 3.1, z * 0.009 + 1.7, 4) - 0.5;
+    const w2 = fbm(x * 0.009 + 19.4, z * 0.009 + 7.2, 4) - 0.5;
+    // Second pass (cheap multi-warp) for twisted crystal ridges
+    const x1 = x + w1 * s * 2;
+    const z1 = z + w2 * s * 2;
+    const w3 = fbm(x1 * 0.014 + 41, z1 * 0.014 + 9, 3) - 0.5;
+    const w4 = fbm(x1 * 0.014 + 8, z1 * 0.014 + 33, 3) - 0.5;
+    return {
+      x: x + w1 * s * 2 + w3 * s * 0.65,
+      z: z + w2 * s * 2 + w4 * s * 0.65,
+    };
+  }
+
+  /** Quantize sprint score so neighboring chunks share similar bake bands (less seams) */
+  function quantizeSprintScore(s) {
+    const t = Math.max(0, Math.min(1.25, s || 0));
+    return Math.round(t * 4) / 4; // 0, 0.25, 0.5, 0.75, 1, 1.25
   }
 
   /**
    * Raw height profile for one biome id (no heightMul) — used for soft blending.
+   * layers: { macro, mid, micro, ampMul, detailMul }
    */
-  function heightProfile(biomeId, x, z, macro, mid, micro) {
+  function heightProfile(biomeId, x, z, layers) {
+    const macro = layers.macro;
+    const mid = layers.mid;
+    const micro = layers.micro;
+    const detailMul = layers.detailMul != null ? layers.detailMul : 1;
+
     if (biomeId === "emberVoid") {
-      return ridgeFbm(x * 0.018, z * 0.018) * 5.2 + mid * 1.9 + micro * 0.45;
+      return (
+        ridgeFbm(x * 0.018, z * 0.018, 5) * 5.2 +
+        mid * 1.9 +
+        micro * 0.45 * detailMul
+      );
     }
     if (biomeId === "whisperStars") {
-      return macro * 1.35 + mid * 0.75 + micro * 0.28;
+      return macro * 1.35 + mid * 0.75 + micro * 0.28 * detailMul;
     }
     if (biomeId === "frostGlacier") {
-      return macro * 4.2 + Math.pow(Math.max(0.01, mid), 1.35) * 2.8 + micro * 0.55;
+      return (
+        macro * 4.2 +
+        Math.pow(Math.max(0.01, mid), 1.35) * 2.8 +
+        micro * 0.55 * detailMul
+      );
     }
     if (biomeId === "jadeCanopy") {
-      return macro * 3.0 + mid * 1.75 + micro * 0.5;
+      return macro * 3.0 + mid * 1.75 + micro * 0.5 * detailMul;
     }
     if (biomeId === "solarGold") {
-      return Math.sin(macro * Math.PI * 2) * 1.35 + mid * 2.4 + micro * 0.4;
+      return Math.sin(macro * Math.PI * 2) * 1.35 + mid * 2.4 + micro * 0.4 * detailMul;
     }
     if (biomeId === "rosePulse") {
-      return macro * 2.9 + mid * 1.7 + micro * 0.48;
+      return macro * 2.9 + mid * 1.7 + micro * 0.48 * detailMul;
     }
-    // crystalNebula — rolling teal hills
-    return macro * 3.4 + mid * 1.95 + micro * 0.58;
+    // crystalNebula — domain-warped organic crystal ridges + soft hills
+    const w = domainWarp(x, z, 16);
+    const cMacro = fbm(w.x * 0.0072, w.z * 0.0072, 5);
+    const cMid = fbm(w.x * 0.024 + 17, w.z * 0.024, 4);
+    const cMicro = fbm(w.x * 0.078 + 41, w.z * 0.078, 3);
+    const cRidge = ridgeFbm(w.x * 0.012, w.z * 0.012, 4);
+    return cMacro * 3.35 + cMid * 1.9 + cMicro * 0.55 * detailMul + cRidge * 1.05;
   }
 
   /**
    * Surface height at world XZ — macro continents + biome silhouette.
-   * Biome height is blend-weighted so transitions are soft hills, not cliff walls.
+   * @param {number} [sprintScore] 0..1+ baked score for amplitude/detail (new chunks only)
    */
-  function surfaceHeight(x, z) {
-    const macro = fbm(x * 0.0075, z * 0.0075);
-    const mid = fbm(x * 0.026 + 17, z * 0.026);
-    const micro = fbm(x * 0.085 + 41, z * 0.085);
+  function surfaceHeight(x, z, sprintScore) {
+    const score = Math.max(0, Math.min(1.25, sprintScore || 0));
+    // Mild: high score → slightly taller + richer detail (does NOT rebuild old chunks)
+    const ampMul = 1.0 + score * 0.2;
+    const detailMul = 1.0 + score * 0.42;
+
+    const macro = fbm(x * 0.0075, z * 0.0075, 5);
+    const mid = fbm(x * 0.026 + 17, z * 0.026, 4);
+    const micro = fbm(x * 0.085 + 41, z * 0.085, 3);
+    const layers = {
+      macro: macro,
+      mid: mid,
+      micro: micro,
+      ampMul: ampMul,
+      detailMul: detailMul,
+    };
 
     let h = 0;
     let mul = 1;
@@ -286,7 +595,7 @@
           const id = ids[i];
           const w = mix[id] || 0;
           if (w < 0.02) continue;
-          hAcc += heightProfile(id, x, z, macro, mid, micro) * w;
+          hAcc += heightProfile(id, x, z, layers) * w;
           const def = biomes[id];
           mulAcc += (def && def.heightMul != null ? def.heightMul : 1) * w;
           sumW += w;
@@ -296,20 +605,46 @@
           mul = mulAcc / sumW;
         } else {
           const id = (b.primary && b.primary.id) || "crystalNebula";
-          h = heightProfile(id, x, z, macro, mid, micro);
+          h = heightProfile(id, x, z, layers);
           mul = b.primary && b.primary.heightMul != null ? b.primary.heightMul : 1;
         }
       } else {
         const id = (b.primary && b.primary.id) || "crystalNebula";
-        h = heightProfile(id, x, z, macro, mid, micro);
+        h = heightProfile(id, x, z, layers);
         mul = b.primary && b.primary.heightMul != null ? b.primary.heightMul : 1;
       }
     } else {
-      h = heightProfile("crystalNebula", x, z, macro, mid, micro);
+      h = heightProfile("crystalNebula", x, z, layers);
     }
-    // Micro grit on the heightfield itself
-    h += (hash2(x * 0.55, z * 0.55) - 0.5) * 0.28;
-    return h * mul;
+    // Micro grit on the heightfield itself (score adds a little roughness)
+    h += (hash2(x * 0.55, z * 0.55) - 0.5) * (0.22 + score * 0.12);
+    return h * mul * ampMul;
+  }
+
+  /**
+   * Height for a single biome (matches GLSL boltTerrainHeight for that chunk's majority biome).
+   * Used by heightAt when GPU displacement is on so feet track the mesh.
+   */
+  function surfaceHeightPrimary(x, z, sprintScore, biomeId) {
+    const score = Math.max(0, Math.min(1.25, sprintScore || 0));
+    const ampMul = 1.0 + score * 0.2;
+    const detailMul = 1.0 + score * 0.42;
+    const layers = {
+      macro: fbm(x * 0.0075, z * 0.0075, 5),
+      mid: fbm(x * 0.026 + 17, z * 0.026, 4),
+      micro: fbm(x * 0.085 + 41, z * 0.085, 3),
+      ampMul: ampMul,
+      detailMul: detailMul,
+    };
+    const id = biomeId || "crystalNebula";
+    let mul = 1;
+    if (global.BoltProcedural && global.BoltProcedural.BIOMES && global.BoltProcedural.BIOMES[id]) {
+      const def = global.BoltProcedural.BIOMES[id];
+      if (def.heightMul != null) mul = def.heightMul;
+    }
+    let h = heightProfile(id, x, z, layers);
+    h += (hash2(x * 0.55, z * 0.55) - 0.5) * (0.22 + score * 0.12);
+    return h * mul * ampMul;
   }
 
   class OpenWorld {
@@ -338,16 +673,22 @@
       this.scaleProps = lerpStageProps(0);
       this._lastCx = null;
       this._lastCz = null;
+      /** Quantized sprint score used only when baking NEW chunks */
+      this._terrainScore = 0;
     }
 
     _key(cx, cz) {
       return cx + "," + cz;
     }
 
-    _buildChunk(cx, cz) {
+    _buildChunk(cx, cz, scoreBake) {
       const g = new THREE.Group();
       g.userData.cx = cx;
       g.userData.cz = cz;
+      // Bake sprint score into this chunk only (never morph existing ground under Bolt)
+      const score =
+        scoreBake != null ? scoreBake : this._terrainScore != null ? this._terrainScore : 0;
+      g.userData.scoreBake = score;
 
       const ox = cx * CHUNK;
       const oz = cz * CHUNK;
@@ -366,13 +707,19 @@
       let biomeVotes = Object.create(null);
       let sampleN = 0;
 
+      const useGpu = GPU_HEIGHT;
       for (let i = 0; i < pos.count; i++) {
         const lx = pos.getX(i);
         const lz = pos.getZ(i);
         const wx = ox + CHUNK * 0.5 + lx;
         const wz = oz + CHUNK * 0.5 + lz;
-        let h = surfaceHeight(wx, wz);
-        pos.setY(i, h);
+        // Always sample CPU height for colors / shade; mesh Y is GPU or baked
+        let h = surfaceHeight(wx, wz, score);
+        if (useGpu) {
+          pos.setY(i, 0); // GPU vertex shader applies full height
+        } else {
+          pos.setY(i, h);
+        }
 
         // Soft per-vertex biome color (organic transitions, not square cell cuts)
         let cr = 0.15;
@@ -407,7 +754,20 @@
       }
       pos.needsUpdate = true;
       geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-      geo.computeVertexNormals();
+      if (!useGpu) {
+        geo.computeVertexNormals();
+      } else {
+        // GPU displaces + rebuilds normals; expand bounds so frustum cull stays correct
+        geo.computeBoundingBox();
+        if (geo.boundingBox) {
+          geo.boundingBox.min.y = -8;
+          geo.boundingBox.max.y = 55;
+        }
+        geo.computeBoundingSphere();
+        if (geo.boundingSphere) {
+          geo.boundingSphere.radius = Math.max(geo.boundingSphere.radius, CHUNK * 0.85);
+        }
+      }
 
       // Chunk albedo map from majority biome (vertex colors blend the edges)
       let biomeId = "crystalNebula";
@@ -444,15 +804,29 @@
         }
       }
 
+      // Option 4: GPU height displacement (value noise + fBm + ridged + crystal warp)
+      if (useGpu) {
+        applyGpuTerrainMaterial(mat, {
+          score: score,
+          biomeId: biomeId,
+          octaves: GPU_OCTAVES,
+        });
+      }
+
       const mesh = new THREE.Mesh(geo, mat);
       mesh.receiveShadow = true;
       mesh.castShadow = false;
       mesh.name = "GroundChunk";
       mesh.frustumCulled = true;
+      mesh.userData.gpuHeight = useGpu;
+      mesh.userData.biomeId = biomeId;
+      g.userData.gpuHeight = useGpu;
+      g.userData.biomeId = biomeId;
       g.add(mesh);
 
       // --- Tier 4: dense ground dressing (instanced) + clear bubbles ---
-      this._dressChunk(g, cx, cz, ox, oz, biomeId);
+      // Dressing uses CPU height (same noise) so props sit on the GPU surface
+      this._dressChunk(g, cx, cz, ox, oz, biomeId, score);
 
       g.position.set(ox + CHUNK * 0.5, 0, oz + CHUNK * 0.5);
       // Static chunk: freeze matrices (same look, less CPU every frame)
@@ -480,8 +854,17 @@
      * Dense surface dressing: pebbles, moss, crystals, dust plates, few boulders.
      * Clear bubble around world origin (citadel) and sparse random clearings.
      */
-    _dressChunk(g, cx, cz, ox, oz, biomeId) {
+    _dressChunk(g, cx, cz, ox, oz, biomeId, scoreBake) {
       const seed = hash2(cx * 12.3, cz * 45.7);
+      const score = scoreBake != null ? scoreBake : 0;
+      // When GPU height is on, match majority-biome height so props sit on the mesh
+      const heightFn = GPU_HEIGHT
+        ? function (wx, wz) {
+            return surfaceHeightPrimary(wx, wz, score, biomeId);
+          }
+        : function (wx, wz) {
+            return surfaceHeight(wx, wz, score);
+          };
       const accent =
         (global.BoltProcedural &&
           global.BoltProcedural.BIOMES &&
@@ -582,7 +965,7 @@
           const wx = ox + CHUNK * 0.5 + px;
           const wz = oz + CHUNK * 0.5 + pz;
           if (inClear(wx, wz)) continue;
-          const hy = surfaceHeight(wx, wz);
+          const hy = heightFn(wx, wz);
           const roll = hash2(i * 3.1 + cx, cz * 2.2 + i + kindSalt);
           dummy.position.set(px, hy + 0.04, pz);
           if (kind === "pebble") {
@@ -631,7 +1014,7 @@
         const wx = ox + CHUNK * 0.5 + px;
         const wz = oz + CHUNK * 0.5 + pz;
         if (inClear(wx, wz)) continue;
-        const hy = surfaceHeight(wx, wz);
+        const hy = heightFn(wx, wz);
         const roll = hash2(i + cx * 2, cz);
         if (roll < 0.22 && i === 0) {
           const plat = new THREE.Mesh(
@@ -688,12 +1071,18 @@
      * so the path ahead always has ground (no empty horizon).
      * @param {number} wx
      * @param {number} wz
-     * @param {{ vx?: number, vz?: number, lookYaw?: number }} [opts]
+     * @param {{ vx?: number, vz?: number, lookYaw?: number, sprintScore?: number }} [opts]
      */
     ensureAround(wx, wz, opts) {
       opts = opts || {};
       const cx = Math.floor(wx / CHUNK);
       const cz = Math.floor(wz / CHUNK);
+
+      // Sprint score only affects NEW chunks (baked once at build time)
+      if (opts.sprintScore != null) {
+        this._terrainScore = quantizeSprintScore(opts.sprintScore);
+      }
+      const scoreBake = this._terrainScore || 0;
 
       // Prefer motion direction; fall back to look yaw
       let fdx = 0;
@@ -712,9 +1101,16 @@
         const k = this._key(ix, iz);
         needed.add(k);
         if (!this.chunks.has(k)) {
-          const ch = this._buildChunk(ix, iz);
+          const ch = this._buildChunk(ix, iz, scoreBake);
           this.group.add(ch);
-          this.chunks.set(k, { group: ch, cx: ix, cz: iz });
+          this.chunks.set(k, {
+            group: ch,
+            cx: ix,
+            cz: iz,
+            scoreBake: scoreBake,
+            biomeId: ch.userData && ch.userData.biomeId,
+            gpuHeight: !!(ch.userData && ch.userData.gpuHeight),
+          });
         }
       }
       const self = this;
@@ -928,6 +1324,9 @@
       if (q.view != null) VIEW = Math.max(1, Math.min(4, q.view | 0));
       if (q.groundSegs != null) GROUND_SEGS = Math.max(20, Math.min(48, q.groundSegs | 0));
       if (q.dressMul != null) DRESS_MUL = Math.max(0.35, Math.min(1.4, q.dressMul));
+      // GPU height: Low can disable for weak iGPUs; octaves scale with tier
+      if (q.gpuHeight != null) GPU_HEIGHT = !!q.gpuHeight;
+      if (q.gpuOctaves != null) GPU_OCTAVES = Math.max(2, Math.min(5, q.gpuOctaves | 0));
       if (q.rebuild) this.rebuildStreaming();
     }
 
@@ -947,8 +1346,33 @@
       this._lastCz = null;
     }
 
+    /**
+     * Ground height matching the chunk under (x,z).
+     * GPU chunks: primary-biome formula (same as GLSL) + baked score.
+     * CPU chunks: full biome blend + baked score.
+     */
     heightAt(x, z) {
-      return surfaceHeight(x, z);
+      const cx = Math.floor(x / CHUNK);
+      const cz = Math.floor(z / CHUNK);
+      const ch = this.chunks.get(this._key(cx, cz));
+      let score = this._terrainScore || 0;
+      let biomeId = null;
+      let useGpu = GPU_HEIGHT;
+      if (ch) {
+        if (ch.scoreBake != null) score = ch.scoreBake;
+        else if (ch.group && ch.group.userData && ch.group.userData.scoreBake != null) {
+          score = ch.group.userData.scoreBake;
+        }
+        biomeId = ch.biomeId || (ch.group && ch.group.userData && ch.group.userData.biomeId);
+        if (ch.gpuHeight != null) useGpu = ch.gpuHeight;
+        else if (ch.group && ch.group.userData && ch.group.userData.gpuHeight != null) {
+          useGpu = ch.group.userData.gpuHeight;
+        }
+      }
+      if (useGpu && biomeId) {
+        return surfaceHeightPrimary(x, z, score, biomeId);
+      }
+      return surfaceHeight(x, z, score);
     }
 
     getScaleFactors() {
@@ -959,9 +1383,21 @@
   global.BoltOpenWorld = {
     OpenWorld: OpenWorld,
     surfaceHeight: surfaceHeight,
+    surfaceHeightPrimary: surfaceHeightPrimary,
+    valueNoise: valueNoise,
+    fbm: fbm,
+    ridgeFbm: ridgeFbm,
+    domainWarp: domainWarp,
+    applyGpuTerrainMaterial: applyGpuTerrainMaterial,
     CHUNK: CHUNK,
     SCALE_STAGES: SCALE_STAGES,
     lerpStageProps: lerpStageProps,
     lerpStagePropsSurface: lerpStagePropsSurface,
+    get gpuHeightEnabled() {
+      return GPU_HEIGHT;
+    },
+    get gpuOctaves() {
+      return GPU_OCTAVES;
+    },
   };
 })(typeof window !== "undefined" ? window : globalThis);

@@ -405,6 +405,9 @@
       groundSegs: 22,
       view: 1,
       dressMul: 0.4,
+      // Low: CPU-baked height only (friendlier to weak integrated GPUs)
+      gpuHeight: false,
+      gpuOctaves: 3,
       hemi: 0.48,
       particles: false,
       particleOp: 0.35,
@@ -426,6 +429,8 @@
       groundSegs: 32,
       view: 2,
       dressMul: 0.7,
+      gpuHeight: true,
+      gpuOctaves: 3,
       hemi: 0.5,
       particles: true,
       particleOp: 0.55,
@@ -447,6 +452,8 @@
       groundSegs: 40,
       view: 3,
       dressMul: 1.0,
+      gpuHeight: true,
+      gpuOctaves: 4,
       hemi: 0.52,
       particles: true,
       particleOp: 0.72,
@@ -468,6 +475,8 @@
       groundSegs: 44,
       view: 3,
       dressMul: 1.15,
+      gpuHeight: true,
+      gpuOctaves: 5,
       hemi: 0.52,
       particles: true,
       particleOp: 0.82,
@@ -594,6 +603,8 @@
         view: q.view,
         groundSegs: q.groundSegs,
         dressMul: q.dressMul,
+        gpuHeight: q.gpuHeight !== false,
+        gpuOctaves: q.gpuOctaves != null ? q.gpuOctaves : 4,
         rebuild: !!opts.rebuild,
       });
       if (opts.rebuild && player && openWorld.ensureAround) {
@@ -601,6 +612,7 @@
           vx: state && state.vel ? state.vel.x : 0,
           vz: state && state.vel ? state.vel.z : 0,
           lookYaw: typeof yaw === "number" ? yaw : 0,
+          sprintScore: state && state.meaningfulScore != null ? state.meaningfulScore : 0,
         });
       } else if (opts.rebuild && openWorld.ensureAround) {
         openWorld.ensureAround(0, 0);
@@ -3697,6 +3709,8 @@
       vx: state.vel.x,
       vz: state.vel.z,
       lookYaw: yaw,
+      // Bake into NEW chunks only — mild height/detail at high meaningful sprint
+      sprintScore: state.meaningfulScore || 0,
     });
 
     // Biome atmosphere (fog / lights) — sky dome keeps nebula art

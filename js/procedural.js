@@ -20,43 +20,63 @@
   const SPAWN_THRESHOLD = 0.65;
   const FADE_IN_SEC = 0.85;
   const FADE_OUT_SEC = 2.5;
-  const MAX_ACTIVE = 360;
+  const MAX_ACTIVE = 120;
   const WORLD_R = 1e9; // open world — no practical edge
   const LOOKAHEAD_MIN = 2.4; // seconds — generate farther ahead
   const LOOKAHEAD_MAX = 6.5;
 
   /**
-   * Personal space around Bolt — clutter must spawn OUTSIDE these radii.
-   * Paths may sit closer (they are the run lane).
+   * Golden rules: never on Bolt, never block the path, spawn ahead on flanks.
+   * Paths may sit closer (they ARE the run lane).
    */
   const CLEAR = {
-    player: 26, // absolute minimum bubble for any solid clutter
-    corridorHalf: 14, // half-width of free run lane
-    corridorAhead: 80,
-    corridorBehind: 14,
-    detailMin: 28,
-    detailClear: 26,
-    detailMax: 55,
-    vegMin: 32,
-    vegClear: 30,
-    vegBigMin: 40,
-    vegBigClear: 38,
-    forestMin: 48,
-    forestClear: 44,
-    forestMax: 85,
-    terrainMin: 36,
-    terrainClear: 34,
-    terrainMax: 70,
-    landmarkPlayer: 42,
-    ruinNestPlayer: 38,
-    ruinDistantMin: 95,
-    ruinDistantClear: 85,
-    killTerrain: 28,
-    killLandmark: 36,
-    killForest: 32,
-    killRuin: 30,
-    killDetail: 22,
-    killVeg: 24,
+    player: 36, // hard bubble — Bolt always readable
+    corridorHalf: 14, // clean highway half-width (meters)
+    corridorAhead: 100,
+    corridorBehind: 18,
+    detailMin: 36,
+    detailClear: 34,
+    detailMax: 70,
+    vegMin: 42,
+    vegClear: 40,
+    vegBigMin: 52,
+    vegBigClear: 50,
+    forestMin: 64,
+    forestClear: 60,
+    forestMax: 110,
+    terrainMin: 48,
+    terrainClear: 46,
+    terrainMax: 95,
+    landmarkPlayer: 58,
+    ruinNestPlayer: 52,
+    ruinDistantMin: 110,
+    ruinDistantClear: 100,
+    // Fade-out if anything drifts into view bubble
+    killTerrain: 38,
+    killLandmark: 48,
+    killForest: 42,
+    killRuin: 40,
+    killDetail: 30,
+    killVeg: 34,
+  };
+
+  /** Per-frame / live caps — high score ≠ spam everything */
+  const SPAWN_BUDGET = {
+    pathCap: 4,
+    terrainCap: 6,
+    landmarkCap: 2,
+    // Small flora can be rich; big structures stay rare
+    vegCap: 36, // stalks / flowers / bushes / clusters / vines / floaters
+    bigVegCap: 5, // single trees / spires / canopy (not full forests)
+    forestCap: 3, // full forest systems — keep low
+    ruinCap: 3,
+    detailCap: 14,
+    // max successful spawns of each type per update tick
+    pathPerTick: 2,
+    terrainPerTick: 1,
+    vegPerTick: 4, // mostly small plants fill these slots
+    ruinPerTick: 1,
+    detailPerTick: 1,
   };
 
   // ---------------------------------------------------------------------------
@@ -147,78 +167,79 @@
       kit.pathThroughForest = false;
       kit.preferLandmark = false;
       kit.preferGroveRuin = false;
+      kit.corridor = 5.5;
     } else if (band.id === "medium") {
       // Small groves — mini multi-layer, not full forest yet
-      kit.preferForest = d > 0.4 && Math.random() < 0.35 * vegBias;
-      kit.forestChance = 0.4 * vegBias;
-      kit.forestRadius = (7 + d * 6) * sparseBias;
-      kit.groundCount = Math.floor((5 + d * 6) * vegBias);
-      kit.midCount = Math.floor((3 + d * 4) * vegBias);
-      kit.canopyCount = Math.floor((1 + d * 2) * vegBias);
-      kit.megaChance = 0.02;
-      kit.corridor = 2.4;
-      kit.lifeMul = 1.1;
-      kit.scaleMul = 0.95;
+      kit.preferForest = d > 0.42 && Math.random() < 0.28 * vegBias;
+      kit.forestChance = 0.32 * vegBias;
+      kit.forestRadius = (6 + d * 5) * sparseBias;
+      kit.groundCount = Math.floor((3 + d * 4) * vegBias);
+      kit.midCount = Math.floor((2 + d * 3) * vegBias);
+      kit.canopyCount = Math.floor((1 + d * 1.5) * vegBias);
+      kit.megaChance = 0.015;
+      kit.corridor = 6.5; // wide clear strip through grove
+      kit.lifeMul = 1.05;
+      kit.scaleMul = 0.92;
       kit.pathThroughForest = true;
-      kit.pathLengthMul = 1.15;
-      kit.pathWidthMul = 1.05;
-      kit.preferLandmark = d > 0.42;
-      kit.landmarkChance = 0.35 * terrainBias;
-      kit.canyonChance = 0.12 * terrainBias;
-      kit.landmarkScale = 1.0 + d * 0.3;
-      kit.preferGroveRuin = d > 0.4;
-      kit.groveRuinChance = 0.4;
-      kit.groveTempleChance = 0.18;
+      kit.pathLengthMul = 1.12;
+      kit.pathWidthMul = 1.08;
+      kit.preferLandmark = d > 0.48;
+      kit.landmarkChance = 0.22 * terrainBias;
+      kit.canyonChance = 0.08 * terrainBias;
+      kit.landmarkScale = 0.95 + d * 0.25;
+      kit.preferGroveRuin = d > 0.45;
+      kit.groveRuinChance = 0.32;
+      kit.groveTempleChance = 0.14;
     } else if (band.id === "high") {
-      // Full forest systems + ridge/canyon co-authorship
+      // Full forest systems on flanks — fewer plants, wider lane
       kit.preferForest = true;
-      kit.forestChance = 0.72 * vegBias;
-      kit.forestRadius = (14 + d * 12) * Math.min(1.35, sparseBias);
-      kit.groundCount = Math.floor((10 + d * 14) * vegBias);
-      kit.midCount = Math.floor((7 + d * 10) * vegBias);
-      kit.canopyCount = Math.floor((5 + d * 8) * vegBias);
-      kit.megaChance = 0.12 * vegBias;
-      kit.corridor = 3.4;
-      kit.lifeMul = 1.45;
-      kit.scaleMul = 1.05;
+      kit.forestChance = 0.55 * vegBias;
+      kit.forestRadius = (12 + d * 9) * Math.min(1.25, sparseBias);
+      kit.groundCount = Math.floor((6 + d * 8) * vegBias);
+      kit.midCount = Math.floor((4 + d * 6) * vegBias);
+      kit.canopyCount = Math.floor((3 + d * 5) * vegBias);
+      kit.megaChance = 0.08 * vegBias;
+      kit.corridor = 8.5; // highway through the chaos
+      kit.lifeMul = 1.35;
+      kit.scaleMul = 1.0;
       kit.pathThroughForest = true;
-      kit.pathLengthMul = 1.55;
-      kit.pathWidthMul = 1.15;
+      kit.pathLengthMul = 1.45;
+      kit.pathWidthMul = 1.18;
       kit.preferLandmark = true;
-      kit.landmarkChance = 0.72 * terrainBias;
-      kit.canyonChance = 0.4 * terrainBias;
-      kit.landmarkScale = 1.35 + d * 0.55;
+      kit.landmarkChance = 0.42 * terrainBias;
+      kit.canyonChance = 0.22 * terrainBias;
+      kit.landmarkScale = 1.15 + d * 0.4;
       kit.preferGroveRuin = true;
-      kit.groveRuinChance = 0.78;
-      kit.groveTempleChance = 0.48;
+      kit.groveRuinChance = 0.55;
+      kit.groveTempleChance = 0.35;
     } else {
-      // Very high — massive multi-feature forest + canyon zones
+      // Very high — impressive flanks, not a wall of rocks on Bolt
       kit.preferForest = true;
-      kit.forestChance = 0.88 * vegBias;
-      kit.forestRadius = (22 + d * 16) * Math.min(1.4, sparseBias);
-      kit.groundCount = Math.floor((16 + d * 18) * vegBias);
-      kit.midCount = Math.floor((12 + d * 14) * vegBias);
-      kit.canopyCount = Math.floor((9 + d * 12) * vegBias);
-      kit.megaChance = 0.28 * vegBias;
-      kit.corridor = 4.0;
-      kit.lifeMul = 1.75;
-      kit.scaleMul = 1.12;
+      kit.forestChance = 0.68 * vegBias;
+      kit.forestRadius = (16 + d * 12) * Math.min(1.3, sparseBias);
+      kit.groundCount = Math.floor((8 + d * 10) * vegBias);
+      kit.midCount = Math.floor((6 + d * 8) * vegBias);
+      kit.canopyCount = Math.floor((4 + d * 7) * vegBias);
+      kit.megaChance = 0.16 * vegBias;
+      kit.corridor = 10.5; // widest clear lane at top speed
+      kit.lifeMul = 1.55;
+      kit.scaleMul = 1.06;
       kit.pathThroughForest = true;
-      kit.pathLengthMul = 2.0;
-      kit.pathWidthMul = 1.28;
+      kit.pathLengthMul = 1.75;
+      kit.pathWidthMul = 1.25;
       kit.preferLandmark = true;
-      kit.landmarkChance = 0.9 * terrainBias;
-      kit.canyonChance = 0.62 * terrainBias;
-      kit.landmarkScale = 1.7 + d * 0.7;
+      kit.landmarkChance = 0.5 * terrainBias;
+      kit.canyonChance = 0.35 * terrainBias;
+      kit.landmarkScale = 1.35 + d * 0.5;
       kit.preferGroveRuin = true;
-      kit.groveRuinChance = 0.92;
-      kit.groveTempleChance = 0.72;
+      kit.groveRuinChance = 0.65;
+      kit.groveTempleChance = 0.48;
     }
 
-    // Hard caps for performance (one entity = whole forest)
-    kit.groundCount = Math.min(kit.groundCount, 28);
-    kit.midCount = Math.min(kit.midCount, 22);
-    kit.canopyCount = Math.min(kit.canopyCount, 18);
+    // Hard caps for performance + readability (one entity = whole forest)
+    kit.groundCount = Math.min(kit.groundCount, 14);
+    kit.midCount = Math.min(kit.midCount, 12);
+    kit.canopyCount = Math.min(kit.canopyCount, 10);
     return kit;
   }
 
@@ -252,6 +273,113 @@
       f *= 2.05;
     }
     return v;
+  }
+
+  /**
+   * Biome domain-warp strength for forests (Quilez-style organic density).
+   * Higher = more flowing thickets / clearings.
+   */
+  function forestWarpStrength(biomeId) {
+    switch (biomeId) {
+      case "emberVoid":
+        return 3.2; // sharper, more aggressive thickets
+      case "whisperStars":
+        return 6.2; // soft dreamy flow
+      case "jadeCanopy":
+        return 5.4;
+      case "frostGlacier":
+        return 3.6;
+      case "solarGold":
+        return 4.4;
+      case "rosePulse":
+        return 5.0;
+      case "crystalNebula":
+      default:
+        return 5.5; // elegant flowing crystal groves
+    }
+  }
+
+  /**
+   * Domain-warped forest density field at world XZ.
+   * Returns 0..1 — high = thick grove, low = clearing.
+   * Double warp (Inigo Quilez style) so forests feel grown, not circular blobs.
+   *
+   * @param {number} worldX
+   * @param {number} worldZ
+   * @param {string} [biomeId]
+   * @param {number} [sprintScore] 0..1+ meaningful density / score
+   */
+  function forestDensity(worldX, worldZ, biomeId, sprintScore) {
+    const score = Math.max(0, Math.min(1.4, sprintScore || 0));
+    const baseWarp = forestWarpStrength(biomeId || "crystalNebula");
+    // Stronger warp at high sprint → more organic dramatic shapes
+    const strength = baseWarp * (0.75 + score * 0.65);
+
+    // Forest-scale coords (large coherent regions)
+    const px = worldX * 0.008;
+    const pz = worldZ * 0.008;
+    const oct = score > 0.75 ? 4 : 3;
+
+    // First domain warp
+    const q1 = fbm(px, pz, oct);
+    const q2 = fbm(px + 5.2, pz + 1.3, oct);
+
+    // Second domain warp
+    const r1 = fbm(px + strength * q1 + 1.7, pz + strength * q2 + 9.2, oct);
+    const r2 = fbm(px + strength * q1 + 8.3, pz + strength * q2 + 2.8, oct);
+
+    // Final density evaluation
+    let d = fbm(px + strength * r1, pz + strength * r2, Math.min(5, oct + 1));
+
+    // Soft remap → usable forest range (clearings + thickets)
+    // fbm ~0..1; push mid-tones into readable density
+    d = THREE.MathUtils.smoothstep(-0.02, 0.72, d);
+
+    // Biome personality on the field
+    if (biomeId === "emberVoid") {
+      // denser thickets, fewer open clearings
+      d = THREE.MathUtils.smoothstep(0.05, 0.78, d * 1.08);
+    } else if (biomeId === "whisperStars") {
+      // more open / dreamy gaps
+      d *= 0.88;
+    } else if (biomeId === "jadeCanopy") {
+      d = Math.min(1, d * 1.06);
+    }
+
+    // Mild score lift so high dens fills slightly more (still leaves clearings)
+    d = Math.min(1, d * (0.92 + score * 0.12));
+    return d;
+  }
+
+  /**
+   * Peak forest density near a point (samples center + flanks) — for spawn decisions.
+   */
+  function forestDensityNear(worldX, worldZ, biomeId, sprintScore, yaw) {
+    const d0 = forestDensity(worldX, worldZ, biomeId, sprintScore);
+    const fx = Math.sin(yaw || 0);
+    const fz = Math.cos(yaw || 0);
+    const rx = Math.cos(yaw || 0);
+    const rz = -Math.sin(yaw || 0);
+    // Sample side-forward pockets (where forests actually spawn)
+    const d1 = forestDensity(
+      worldX + fx * 18 + rx * 28,
+      worldZ + fz * 18 + rz * 28,
+      biomeId,
+      sprintScore
+    );
+    const d2 = forestDensity(
+      worldX + fx * 18 - rx * 28,
+      worldZ + fz * 18 - rz * 28,
+      biomeId,
+      sprintScore
+    );
+    const d3 = forestDensity(
+      worldX + fx * 40 + rx * 22,
+      worldZ + fz * 40 + rz * 22,
+      biomeId,
+      sprintScore
+    );
+    return Math.max(d0, d1, d2, d3);
   }
 
   // ---------------------------------------------------------------------------
@@ -863,7 +991,7 @@
       for (let i = this.live.length - 1; i >= 0; i--) {
         const e = this.live[i];
         e.age += dt;
-        // Emergency clear: anything that drifts into Bolt's bubble fades out fast
+        // Emergency clear: bubble + run-corridor solids (keep Bolt visible)
         if (
           playerPos &&
           (this.kind === "terrain" ||
@@ -887,11 +1015,35 @@
           } else if (this.kind === "detail") {
             killR = CLEAR.killDetail;
           }
-          if (distSq < killR * killR) {
+          let inKill = distSq < killR * killR;
+          // Solids sitting in the highway fade even if slightly farther
+          if (
+            !inKill &&
+            this.kind !== "detail" &&
+            distSq < (killR * 1.65) * (killR * 1.65) &&
+            this._owner &&
+            typeof this._owner._lastYaw === "number"
+          ) {
+            const yaw = this._owner._lastYaw;
+            const fx = Math.sin(yaw);
+            const fz = Math.cos(yaw);
+            const rx = Math.cos(yaw);
+            const rz = -Math.sin(yaw);
+            const along = dx * fx + dz * fz;
+            const side = dx * rx + dz * rz;
+            const hw =
+              this.kind === "terrain" || this.kind === "ruin"
+                ? CLEAR.corridorHalf + 2
+                : CLEAR.corridorHalf;
+            if (along > -CLEAR.corridorBehind && along < CLEAR.corridorAhead * 0.55 && Math.abs(side) < hw) {
+              inKill = true;
+            }
+          }
+          if (inKill) {
             e.fadingOut = true;
-            e.fade = Math.min(e.fade, 0.12);
-            // Fast dissolve when on top of player
-            e.fade = Math.max(0, e.fade - dt * 2.5);
+            e.fade = Math.min(e.fade, 0.1);
+            // Fast dissolve when blocking vision / path
+            e.fade = Math.max(0, e.fade - dt * 3.2);
           }
         }
         if ((!meaningfulActive || e.age > e.life) && !e.fadingOut) {
@@ -1944,69 +2096,72 @@
     forest: { id: "forest", name: "Living Forest" },
   };
 
-  function pickVegType(density, biomeId, noiseVal) {
+  function pickVegType(density, biomeId, noiseVal, preferSmall) {
     const r = Math.random();
     const n = noiseVal != null ? noiseVal : r;
-    // Big trees: more common at higher density / in rich biomes
-    if (density > 0.35 && r < 0.1 + density * 0.12) {
-      if (r < 0.03 + density * 0.04) return VEG_TYPES.megaTree;
+    // Big solo trees stay occasional — preferSmall forces ground flora
+    if (!preferSmall && density > 0.4 && r < 0.06 + density * 0.05) {
+      if (r < 0.02 + density * 0.02) return VEG_TYPES.megaTree;
       if (biomeId === "crystalNebula" || biomeId === "jadeCanopy") return VEG_TYPES.spire;
       return VEG_TYPES.tree;
     }
     if (biomeId === "emberVoid") {
-      if (density > 0.45 && r < 0.18) return VEG_TYPES.tree;
-      if (r < 0.35) return VEG_TYPES.bush;
+      if (!preferSmall && density > 0.55 && r < 0.1) return VEG_TYPES.tree;
+      if (r < 0.32) return VEG_TYPES.bush;
       if (r < 0.55) return VEG_TYPES.stalk;
       if (r < 0.75) return VEG_TYPES.cluster;
-      if (r < 0.9) return VEG_TYPES.flower;
+      if (r < 0.92) return VEG_TYPES.flower;
       return VEG_TYPES.spire;
     }
     if (biomeId === "whisperStars") {
-      if (density > 0.5 && r < 0.15) return VEG_TYPES.tree;
-      if (r < 0.25) return VEG_TYPES.vine;
-      if (r < 0.45) return VEG_TYPES.floater;
-      if (r < 0.65) return VEG_TYPES.stalk;
-      if (r < 0.8) return VEG_TYPES.flower;
-      if (r < 0.92) return VEG_TYPES.canopy;
+      if (!preferSmall && density > 0.55 && r < 0.08) return VEG_TYPES.tree;
+      if (r < 0.28) return VEG_TYPES.vine;
+      if (r < 0.48) return VEG_TYPES.floater;
+      if (r < 0.7) return VEG_TYPES.stalk;
+      if (r < 0.86) return VEG_TYPES.flower;
+      if (!preferSmall && r < 0.94) return VEG_TYPES.canopy;
       return VEG_TYPES.cluster;
     }
     if (biomeId === "jadeCanopy") {
-      if (r < 0.2) return VEG_TYPES.megaTree;
-      if (r < 0.45) return VEG_TYPES.tree;
-      if (r < 0.65) return VEG_TYPES.canopy;
-      if (r < 0.8) return VEG_TYPES.bush;
-      return VEG_TYPES.cluster;
+      // Rich undergrowth; giants stay rare (forests handle drama)
+      if (!preferSmall && r < 0.08) return VEG_TYPES.megaTree;
+      if (!preferSmall && r < 0.18) return VEG_TYPES.tree;
+      if (!preferSmall && r < 0.28) return VEG_TYPES.canopy;
+      if (r < 0.45) return VEG_TYPES.bush;
+      if (r < 0.65) return VEG_TYPES.cluster;
+      if (r < 0.82) return VEG_TYPES.stalk;
+      return VEG_TYPES.flower;
     }
     if (biomeId === "frostGlacier") {
-      if (r < 0.35) return VEG_TYPES.spire;
-      if (r < 0.55) return VEG_TYPES.stalk;
-      if (r < 0.7) return VEG_TYPES.floater;
+      if (!preferSmall && r < 0.18) return VEG_TYPES.spire;
+      if (r < 0.45) return VEG_TYPES.stalk;
+      if (r < 0.65) return VEG_TYPES.floater;
       if (r < 0.85) return VEG_TYPES.cluster;
       return VEG_TYPES.flower;
     }
     if (biomeId === "solarGold") {
-      if (r < 0.3) return VEG_TYPES.bush;
-      if (r < 0.5) return VEG_TYPES.stalk;
-      if (r < 0.7) return VEG_TYPES.flower;
-      if (r < 0.88) return VEG_TYPES.cluster;
-      return VEG_TYPES.tree;
+      if (r < 0.32) return VEG_TYPES.bush;
+      if (r < 0.55) return VEG_TYPES.stalk;
+      if (r < 0.75) return VEG_TYPES.flower;
+      if (r < 0.9) return VEG_TYPES.cluster;
+      return preferSmall ? VEG_TYPES.bush : VEG_TYPES.tree;
     }
     if (biomeId === "rosePulse") {
-      if (r < 0.28) return VEG_TYPES.flower;
-      if (r < 0.5) return VEG_TYPES.bush;
-      if (r < 0.68) return VEG_TYPES.vine;
-      if (r < 0.85) return VEG_TYPES.stalk;
-      return VEG_TYPES.canopy;
+      if (r < 0.3) return VEG_TYPES.flower;
+      if (r < 0.52) return VEG_TYPES.bush;
+      if (r < 0.7) return VEG_TYPES.vine;
+      if (r < 0.88) return VEG_TYPES.stalk;
+      return preferSmall ? VEG_TYPES.cluster : VEG_TYPES.canopy;
     }
-    // Crystal Nebula — ethereal + trees
-    if (density > 0.4 && n > 0.55 && r < 0.28) return VEG_TYPES.canopy;
-    if (r < 0.18) return VEG_TYPES.tree;
-    if (r < 0.28) return VEG_TYPES.spire;
-    if (r < 0.42) return VEG_TYPES.stalk;
-    if (r < 0.55) return VEG_TYPES.flower;
-    if (r < 0.68) return VEG_TYPES.cluster;
+    // Crystal Nebula — rich small flora; occasional ethereal trees
+    if (!preferSmall && density > 0.45 && n > 0.55 && r < 0.12) return VEG_TYPES.canopy;
+    if (!preferSmall && r < 0.08) return VEG_TYPES.tree;
+    if (!preferSmall && r < 0.14) return VEG_TYPES.spire;
+    if (r < 0.32) return VEG_TYPES.stalk;
+    if (r < 0.5) return VEG_TYPES.flower;
+    if (r < 0.66) return VEG_TYPES.cluster;
     if (r < 0.8) return VEG_TYPES.vine;
-    if (r < 0.9) return VEG_TYPES.bush;
+    if (r < 0.92) return VEG_TYPES.bush;
     return VEG_TYPES.floater;
   }
 
@@ -2614,23 +2769,34 @@
       }
 
       /**
-       * Full multi-layer forest system — ground · mid · canopy · optional mega.
-       * Biome variants change mix; corridor keeps a sprint path through the grove.
+       * Full multi-layer forest — domain-warped density (thickets / clearings),
+       * local corridor stays clear (sprint path through the grove).
        */
       function buildForestSystem() {
         const kit = opts.sceneKit || sceneKit(density, biomeId);
         const R = kit.forestRadius || 14 + density * 12;
         const corridor = kit.corridor != null ? kit.corridor : 3.2;
+        const worldX = opts.worldX != null ? opts.worldX : 0;
+        const worldZ = opts.worldZ != null ? opts.worldZ : 0;
+        const yaw = opts.yaw != null ? opts.yaw : 0;
+        const cy = Math.cos(yaw);
+        const sy = Math.sin(yaw);
         // Local corridor along +Z (spawner sets mesh.rotation.y = run yaw)
-        // slight noise so path isn't laser-straight through every grove
         const pathAng = (noise2(seed, seed * 0.3) - 0.5) * 0.18;
         const cPath = Math.cos(pathAng);
         const sPath = Math.sin(pathAng);
 
         function inCorridor(lx, lz) {
-          // Distance to path axis (line along rotated Z)
           const side = -sPath * lx + cPath * lz;
           return Math.abs(side) < corridor * (0.85 + noise2(lx, lz) * 0.25);
+        }
+
+        // Mesh local → world XZ (matches Three.js rotation.y = yaw)
+        function localToWorld(lx, lz) {
+          return {
+            x: worldX + cy * lx + sy * lz,
+            z: worldZ - sy * lx + cy * lz,
+          };
         }
 
         function ringPos(i, salt, radMul) {
@@ -2646,14 +2812,37 @@
           };
         }
 
-        // --- Ground cover layer ---
+        /**
+         * Sample candidate spots; keep only high domain-warped density + off path.
+         * minDens: ground < mid < canopy < mega
+         */
+        function pickForestSpot(i, salt, radMul, minDens, allowCorridor) {
+          for (let attempt = 0; attempt < 10; attempt++) {
+            const p = ringPos(i * 13 + attempt * 3, salt + attempt * 0.37, radMul);
+            if (!allowCorridor && inCorridor(p.x, p.z)) continue;
+            if (allowCorridor && inCorridor(p.x, p.z) && p.nR < 0.8) continue;
+            const w = localToWorld(p.x, p.z);
+            const dens = forestDensity(w.x, w.z, biomeId, density);
+            // Soft edge of grove footprint still respects density field
+            const need = minDens + p.nR * 0.12;
+            if (dens < need) continue;
+            return {
+              x: p.x,
+              z: p.z,
+              nA: p.nA,
+              nR: p.nR,
+              dens: dens,
+            };
+          }
+          return null;
+        }
+
+        // --- Ground cover (low density threshold — fills thickets + soft edges) ---
         const nGround = kit.groundCount || 8;
         for (let i = 0; i < nGround; i++) {
-          const p = ringPos(i, 1.1, 1.05);
-          if (inCorridor(p.x, p.z) && p.nR < 0.85) continue; // keep path clear
-          // Density falloff at edge + natural gaps
-          if (p.nR < 0.12 && Math.random() < 0.4) continue;
-          let sc = 0.45 + p.nA * 0.55 + density * 0.2;
+          const p = pickForestSpot(i, 1.1, 1.05, 0.26, true);
+          if (!p) continue;
+          let sc = 0.4 + p.nA * 0.5 + density * 0.18 + p.dens * 0.35;
           let builder = buildFlower;
           if (isEmber) {
             builder = p.nA < 0.4 ? buildBush : p.nA < 0.7 ? buildStalk : buildFlower;
@@ -2671,19 +2860,17 @@
           } else if (biomeId === "solarGold") {
             builder = p.nA < 0.45 ? buildBush : buildFlower;
           } else {
-            // Crystal — glowing floor
             builder = p.nA < 0.35 ? buildFlower : p.nA < 0.7 ? buildStalk : buildBush;
           }
           placePlant(builder, p.x, p.z, sc);
         }
 
-        // --- Mid layer (bushes, vines, understory) ---
+        // --- Mid layer — needs denser pockets ---
         const nMid = kit.midCount || 6;
         for (let i = 0; i < nMid; i++) {
-          const p = ringPos(i, 2.7, 0.95);
-          if (inCorridor(p.x, p.z)) continue;
-          if (p.nR < 0.15) continue;
-          let sc = 0.55 + p.nR * 0.5 + density * 0.25;
+          const p = pickForestSpot(i, 2.7, 0.95, 0.36, false);
+          if (!p) continue;
+          let sc = 0.5 + p.nR * 0.45 + density * 0.22 + p.dens * 0.3;
           let builder = buildBush;
           if (isEmber) {
             builder = p.nA < 0.55 ? buildBush : buildVine;
@@ -2706,13 +2893,12 @@
           placePlant(builder, p.x, p.z, sc);
         }
 
-        // --- Canopy layer (trees / spires / canopy crowns) ---
+        // --- Canopy — only in high-density thickets ---
         const nCanopy = kit.canopyCount || 5;
         for (let i = 0; i < nCanopy; i++) {
-          const p = ringPos(i, 5.3, 0.88);
-          if (inCorridor(p.x, p.z) && p.nR < 0.75) continue;
-          // Outer ring prefers taller trees
-          let sc = 0.75 + p.nR * 0.55 + density * 0.35;
+          const p = pickForestSpot(i, 5.3, 0.88, 0.44, false);
+          if (!p) continue;
+          let sc = 0.7 + p.nR * 0.5 + density * 0.3 + p.dens * 0.4;
           let builder = buildTree;
           if (isEmber) {
             builder = p.nA < 0.55 ? buildTree : buildSpire;
@@ -2737,31 +2923,29 @@
           placePlant(builder, p.x, p.z, sc);
         }
 
-        // --- Landmark mega tree (high / very-high) ---
+        // --- Mega only in densest core ---
         if (Math.random() < (kit.megaChance || 0)) {
-          const p = ringPos(99, 9.1, 0.55);
-          if (!inCorridor(p.x, p.z)) {
+          const p = pickForestSpot(99, 9.1, 0.55, 0.55, false);
+          if (p) {
             const megaBuilder =
               biomeId === "frostGlacier"
                 ? buildSpire
                 : biomeId === "whisperStars"
                   ? buildCanopy
                   : buildMegaTree;
-            placePlant(megaBuilder, p.x * 0.7, p.z * 0.7, 1.15 + density * 0.35);
+            placePlant(megaBuilder, p.x * 0.85, p.z * 0.85, 1.1 + density * 0.3 + p.dens * 0.25);
           }
         }
 
-        // --- Air layer: floaters / spores inside canopy volume ---
-        const airN = Math.floor(
-          (isWhisper ? 6 : isCrystal ? 5 : 3) + density * 4
-        );
+        // --- Air layer: floaters in medium+ density volumes ---
+        const airN = Math.floor((isWhisper ? 6 : isCrystal ? 5 : 3) + density * 4);
         for (let i = 0; i < airN; i++) {
-          const p = ringPos(i, 11.0, 0.7);
-          if (inCorridor(p.x, p.z)) continue;
-          placePlant(buildFloater, p.x, p.z, 0.5 + Math.random() * 0.4);
+          const p = pickForestSpot(i, 11.0, 0.7, 0.3, false);
+          if (!p) continue;
+          placePlant(buildFloater, p.x, p.z, 0.45 + p.dens * 0.35 + Math.random() * 0.2);
         }
 
-        // Soft ground-glow discs along corridor (path invitation)
+        // Soft ground-glow discs along corridor (path invitation — always clear)
         if (density > 0.45) {
           const glows = 3 + Math.floor(density * 3);
           for (let i = 0; i < glows; i++) {
@@ -2778,14 +2962,17 @@
           }
         }
 
-        // Resonance jewel at forest heart
+        // Resonance jewel only if center is actually a dense thicket
         if ((opts.resonance || 0) > 0.35 && density > 0.5) {
-          const jewel = new THREE.Mesh(
-            new THREE.OctahedronGeometry(0.35 + density * 0.15, 0),
-            plantMat(0xfbbf24, 0xf59e0b, 1.4, 0.15)
-          );
-          jewel.position.set(0, 0.6 + density * 0.4, 0);
-          group.add(jewel);
+          const coreDens = forestDensity(worldX, worldZ, biomeId, density);
+          if (coreDens > 0.4) {
+            const jewel = new THREE.Mesh(
+              new THREE.OctahedronGeometry(0.35 + density * 0.15, 0),
+              plantMat(0xfbbf24, 0xf59e0b, 1.4, 0.15)
+            );
+            jewel.position.set(0, 0.6 + density * 0.4, 0);
+            group.add(jewel);
+          }
         }
       }
 
@@ -4265,12 +4452,17 @@
       this._fluxBoost = 0; // temporary density amp (howl / resonance events)
 
       this.pools = {
-        path: new ObjectPool(createPathMesh, "path", 16),
-        terrain: new ObjectPool(createTerrainMesh, "terrain", 40),
-        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 88),
-        ruin: new ObjectPool(createRuinMesh, "ruin", 20),
-        detail: new ObjectPool(createDetailMesh, "detail", 80),
+        path: new ObjectPool(createPathMesh, "path", 12),
+        terrain: new ObjectPool(createTerrainMesh, "terrain", 18),
+        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 48),
+        ruin: new ObjectPool(createRuinMesh, "ruin", 10),
+        detail: new ObjectPool(createDetailMesh, "detail", 28),
       };
+      // So pools can emergency-clear corridor solids using run yaw
+      Object.keys(this.pools).forEach((k) => {
+        this.pools[k]._owner = this;
+      });
+      this._lastYaw = 0;
       this.pathTypeStats = { hidden: 0, shortcut: 0, branch: 0, energy: 0 };
       this.terrainTypeStats = {
         boulders: 0, ridge: 0, crater: 0, cliff: 0, floater: 0, landmark: 0, canyon: 0,
@@ -4294,6 +4486,7 @@
       this.pathCooldown = 0;
       this.terrainCooldown = 0;
       this.vegCooldown = 0;
+      this.forestCooldown = 0;
       this.ruinCooldown = 0;
       this.detailCooldown = 0;
 
@@ -4468,22 +4661,24 @@
             : CLEAR.corridorHalf;
       const blockCorridor = opts.blockCorridor !== false && !orbital;
 
-      for (let attempt = 0; attempt < 20; attempt++) {
+      const strictSides = opts.strictSides !== false && !orbital; // solids: pure flanks only
+      for (let attempt = 0; attempt < 24; attempt++) {
         const r = minR + Math.random() * Math.max(0.5, maxR - minR);
         let ang;
         if (preferSide && !orbital) {
-          // Prefer pure flanks — rarely dead-ahead (keeps camera/Bolt clear)
-          const mode = Math.random();
           const sideSign = Math.random() > 0.5 ? 1 : -1;
-          if (mode < 0.55) {
-            // pure left/right flank
-            ang = sideSign * (Math.PI * 0.5 + (Math.random() - 0.5) * 0.4);
-          } else if (mode < 0.9) {
-            // side-forward diagonal (~40–70° off heading)
-            ang = sideSign * (0.7 + Math.random() * 0.55);
+          if (strictSides || opts.solid) {
+            // GOLDEN RULE: rocks/trees/ruins on SIDES of the path only
+            // ~75–105° off heading (never on the highway)
+            ang = sideSign * (Math.PI * 0.5 + (Math.random() - 0.5) * 0.28);
           } else {
-            // soft side-back (behind flanks)
-            ang = sideSign * (Math.PI * 0.6 + Math.random() * 0.4);
+            const mode = Math.random();
+            if (mode < 0.65) {
+              ang = sideSign * (Math.PI * 0.5 + (Math.random() - 0.5) * 0.35);
+            } else {
+              // side-forward only for light details
+              ang = sideSign * (0.85 + Math.random() * 0.4);
+            }
           }
         } else {
           // Orbital: wide ring, avoid exact underfoot
@@ -4589,21 +4784,24 @@
     _spawnDetail(pred, yaw, density, biome, resonance, pool, playerPos) {
       const st = this._scaleStage || "paw";
       const orbital = st === "orbital" || st === "solar" || st === "cosmic";
-      // Surface allows denser micro decoration again
-      if (pool.activeCount >= (orbital ? 18 : 56)) return false;
+      // Cap details — high dens should feel spacious, not particle spam
+      if (pool.activeCount >= (orbital ? 14 : SPAWN_BUDGET.detailCap)) return false;
       if (this.detailCooldown > 0 && density < (orbital ? 0.4 : 0.55)) return false;
 
-      const origin = playerPos || pred;
-      // Details stay on flanks — well outside Bolt's bubble
+      // Spawn AHEAD of Bolt (predicted), never centered on him
+      const origin = pred || playerPos;
+      // Small decorative only: sides ok, never solid-block the highway
       const placed = this._placeAround(origin, yaw, {
         orbital: orbital,
         minR: orbital ? 28 : CLEAR.detailMin,
-        maxR: orbital ? 80 : CLEAR.detailMax,
+        maxR: orbital ? 80 : CLEAR.detailMax + density * 8,
         preferSide: true,
+        solid: false,
+        strictSides: false,
         clearR: orbital ? 24 : CLEAR.detailClear,
-        corridorHalf: orbital ? 0 : CLEAR.corridorHalf,
+        corridorHalf: orbital ? 0 : CLEAR.corridorHalf * 0.55, // thin glow on path edge ok
         blockCorridor: !orbital,
-        stackMin: orbital ? 14 : 5,
+        stackMin: orbital ? 14 : 7,
         jitter: orbital ? 5 : 2.2,
       });
       if (!placed) return false;
@@ -4673,8 +4871,9 @@
 
       this.detailCooldown = orbital
         ? THREE.MathUtils.lerp(1.1, 0.45, Math.min(1, density + resonance * 0.3))
-        : THREE.MathUtils.lerp(0.14, 0.04, Math.min(1, density + resonance * 0.4));
-      if (!orbital && density > 0.5) this.detailCooldown *= 0.55;
+        : THREE.MathUtils.lerp(0.28, 0.12, Math.min(1, density + resonance * 0.4));
+      // At high speed, SLOW details further (less clutter in view)
+      if (!orbital && density > 0.55) this.detailCooldown *= 1.35 + density * 0.4;
 
       this._remember(x, z);
       this.stats.spawned++;
@@ -4687,14 +4886,15 @@
      */
     _spawnRuin(pred, yaw, density, biome, resonance, pool, playerPos, coop) {
       coop = coop || null;
-      if (pool.activeCount >= 14) return false;
+      if (pool.activeCount >= (SPAWN_BUDGET.ruinCap + 1)) return false;
       if (this.ruinCooldown > 0 && !(coop && coop.forceGrove)) return false;
 
       const st = this._scaleStage || "paw";
       const orbital =
         st === "orbital" || st === "solar" || st === "cosmic";
 
-      const origin = playerPos || pred;
+      // Ruins spawn far ahead on flanks
+      const origin = pred || playerPos;
       const kit = sceneKit(density, biome.id);
       const scene =
         !orbital &&
@@ -4766,8 +4966,10 @@
           minR: orbital ? 120 : CLEAR.ruinDistantMin,
           maxR: orbital ? 300 : 200,
           preferSide: true,
+          solid: true,
+          strictSides: true,
           clearR: orbital ? 100 : CLEAR.ruinDistantClear,
-          corridorHalf: orbital ? 0 : CLEAR.corridorHalf + 2,
+          corridorHalf: orbital ? 0 : CLEAR.corridorHalf + 4,
           blockCorridor: !orbital,
           stackMin: orbital ? 95 : 80,
           jitter: orbital ? 10 : 5,
@@ -5135,21 +5337,49 @@
      * VegetationGenerator — clusters + multi-layer forest systems (high density bands).
      * Avoids path center; flanks routes; density band drives scene kits.
      */
+    _countVegKinds() {
+      const pool = this.pools.vegetation;
+      let forest = 0;
+      let big = 0;
+      let small = 0;
+      if (!pool || !pool.live) return { forest: 0, big: 0, small: 0, total: 0 };
+      for (let i = 0; i < pool.live.length; i++) {
+        const ae = pool.live[i];
+        if (!ae || !ae.active || !ae.mesh || !ae.mesh.userData) continue;
+        const t = ae.mesh.userData.vegType;
+        if (t === "forest") forest++;
+        else if (t === "tree" || t === "megaTree" || t === "spire" || t === "canopy") big++;
+        else small++;
+      }
+      return { forest: forest, big: big, small: small, total: forest + big + small };
+    }
+
     _spawnVegetation(pred, yaw, density, biome, resonance, pool, playerPos) {
       // Vegetation doesn't make sense in orbit
       const st = this._scaleStage || "paw";
       if (st === "orbital" || st === "solar" || st === "cosmic") return false;
-      // Forests are heavy — cap active; leave room for single plants
-      if (pool.activeCount >= 64) return false;
-      if (this.vegCooldown > 0) return false;
+      if (pool.activeCount >= SPAWN_BUDGET.vegCap) return false;
 
-      const origin = playerPos || pred;
+      // Separate cooldowns: forests stay rare; small plants can spray more
+      const forestCd = this.forestCooldown || 0;
+      const smallCd = this.vegCooldown || 0;
+
+      // Spawn around predicted position (ahead), not under Bolt
+      const origin = pred || playerPos;
       const kit = sceneKit(density, biome.id);
       this._sceneBand = kit.band;
+      const counts = this._countVegKinds();
 
-      // Noise field decides forest vs clearing
+      // Domain-warped forest field + light fbm freckle for micro decisions
       const noiseSample = fbm(origin.x * 0.04 + this.stats.spawned * 0.1, origin.z * 0.04, 3);
-      // Sparse biomes / clearings skip more often
+      const forestField = forestDensityNear(
+        origin.x,
+        origin.z,
+        biome.id,
+        density,
+        yaw
+      );
+      // Sparse biomes / clearings skip more often (small plants less strict)
       const clearThresh =
         biome.id === "whisperStars"
           ? 0.42
@@ -5158,84 +5388,110 @@
             : biome.id === "emberVoid"
               ? 0.28
               : 0.22;
-      if (noiseSample < clearThresh && density < 0.7 && kit.band !== "veryHigh") {
-        this.vegCooldown = 0.15;
-        return false;
-      }
+      // Domain-warp density needed to open a full forest system
+      const forestDensMin =
+        biome.id === "emberVoid" ? 0.3 : biome.id === "whisperStars" ? 0.36 : 0.32;
 
-      // High / very-high (+ some medium groves): spawn full forest systems
-      let typeDef;
+      // Full forests only when cooldown ready, under cap, and density field is a thicket
+      const forestCap =
+        kit.band === "veryHigh"
+          ? SPAWN_BUDGET.forestCap
+          : kit.band === "high"
+            ? Math.max(2, SPAWN_BUDGET.forestCap - 1)
+            : 2;
       const wantForest =
+        forestCd <= 0 &&
+        counts.forest < forestCap &&
         kit.preferForest &&
         Math.random() < kit.forestChance &&
-        noiseSample > clearThresh * 0.75;
+        forestField >= forestDensMin &&
+        noiseSample > clearThresh * 0.55;
+
+      let typeDef;
       if (wantForest) {
         typeDef = VEG_TYPES.forest;
       } else {
-        typeDef = pickVegType(density, biome.id, noiseSample);
+        if (smallCd > 0) return false;
+        // Prefer ground flora — big solo trees only if under bigVegCap
+        const preferSmall =
+          counts.big >= SPAWN_BUDGET.bigVegCap || Math.random() < 0.75;
+        // Domain-warp clearings: fewer plants in open pockets
+        if (forestField < 0.22 && density < 0.6 && Math.random() < 0.5) {
+          this.vegCooldown = 0.06;
+          return false;
+        }
+        if (noiseSample < clearThresh && density < 0.55 && Math.random() < 0.4) {
+          this.vegCooldown = 0.06;
+          return false;
+        }
+        typeDef = pickVegType(density, biome.id, noiseSample, preferSmall);
+        // Enforce big solo cap
+        const tid = typeDef.id;
+        if (
+          (tid === "tree" || tid === "megaTree" || tid === "spire" || tid === "canopy") &&
+          counts.big >= SPAWN_BUDGET.bigVegCap
+        ) {
+          typeDef = pickVegType(density, biome.id, noiseSample, true);
+        }
       }
 
-      const isForest = typeDef.id === "forest";
-      const isBig =
-        isForest ||
+      const isForestFinal = typeDef.id === "forest";
+      const isBigSolo =
         typeDef.id === "tree" ||
         typeDef.id === "megaTree" ||
         typeDef.id === "spire" ||
         typeDef.id === "canopy";
+      const isBig = isForestFinal || isBigSolo;
 
-      // Cap concurrent forests so pools stay healthy
-      if (isForest) {
-        let forestLive = 0;
-        for (let i = 0; i < pool.live.length; i++) {
-          const ae = pool.live[i];
-          if (ae && ae.mesh && ae.mesh.userData && ae.mesh.userData.vegType === "forest") {
-            forestLive++;
-          }
-        }
-        const forestCap = kit.band === "veryHigh" ? 6 : kit.band === "high" ? 5 : 3;
-        if (forestLive >= forestCap) {
-          typeDef = pickVegType(density, biome.id, noiseSample);
-        }
-      }
-      const isForestFinal = typeDef.id === "forest";
-
-      // Forests far enough that their outer trees don't reach Bolt
+      // Forests / big trees stay far on pure flanks; small flora can line the road
       const forestR = kit.forestRadius || 16;
       const forestMinR = Math.max(
         CLEAR.forestMin,
         CLEAR.forestClear + forestR * 0.95
       );
+      const smallMinR = Math.max(CLEAR.player + 2, 30);
       const placed = this._placeAround(origin, yaw, {
         orbital: false,
         minR: isForestFinal
           ? forestMinR
-          : isBig
+          : isBigSolo
             ? CLEAR.vegBigMin
-            : CLEAR.vegMin,
+            : smallMinR,
         maxR: isForestFinal
-          ? Math.max(CLEAR.forestMax, forestMinR + 25) + density * 20
-          : isBig
-            ? 70 + density * 14
-            : CLEAR.detailMax + density * 12,
+          ? Math.max(CLEAR.forestMax, forestMinR + 25) + density * 16
+          : isBigSolo
+            ? 75 + density * 12
+            : 58 + density * 16,
         preferSide: true,
+        solid: isBig, // big = pure 90° flanks; small plants may sit side-forward
+        strictSides: isBig,
         clearR: isForestFinal
           ? forestMinR
-          : isBig
+          : isBigSolo
             ? CLEAR.vegBigClear
-            : CLEAR.vegClear,
-        corridorHalf: isForestFinal ? CLEAR.corridorHalf + 4 : CLEAR.corridorHalf,
+            : CLEAR.player,
+        corridorHalf: isForestFinal
+          ? CLEAR.corridorHalf + 6
+          : isBigSolo
+            ? CLEAR.corridorHalf + 3
+            : CLEAR.corridorHalf * 0.85, // small plants hug path edges
         blockCorridor: true,
-        stackMin: isForestFinal ? 30 + forestR * 0.3 : isBig ? 20 : 8,
-        jitter: isForestFinal ? 4 : 2.4,
+        stackMin: isForestFinal ? 34 + forestR * 0.35 : isBigSolo ? 22 : 4.5,
+        jitter: isForestFinal ? 4 : isBigSolo ? 2.4 : 2.8,
       });
       if (!placed) return false;
+      const corridorW = isForestFinal
+        ? CLEAR.corridorHalf + 6
+        : isBigSolo
+          ? CLEAR.corridorHalf + 3
+          : CLEAR.corridorHalf * 0.85;
       if (
         this._tooCloseToPlayer(placed.x, placed.z, CLEAR.player) ||
         this._inRunCorridor(
           placed.x,
           placed.z,
           yaw,
-          CLEAR.corridorHalf,
+          corridorW,
           CLEAR.corridorAhead,
           CLEAR.corridorBehind
         )
@@ -5244,6 +5500,16 @@
       }
       const x = placed.x;
       const z = placed.z;
+
+      // Forests only land on domain-warped thickets (not random flanks)
+      if (isForestFinal) {
+        const spotDens = forestDensity(x, z, biome.id, density);
+        if (spotDens < forestDensMin) {
+          // Open clearing / weak field — skip this forest (keep path + world clean)
+          this.forestCooldown = 0.12;
+          return false;
+        }
+      }
 
       const surface = this.heightAt(x, z);
       // Simple slope check — skip very steep (height delta nearby)
@@ -5262,6 +5528,9 @@
         resonance: resonance || 0,
         seed: noiseSample * 100 + Math.random() * 50,
         sceneKit: kit,
+        worldX: x,
+        worldZ: z,
+        yaw: yaw,
       });
 
       let scale =
@@ -5303,12 +5572,13 @@
       e.mesh.userData.forest = isForestFinal;
       e.mesh.userData.sceneBand = kit.band;
 
-      // Forests: slower respawn (each is a whole system); singles stay snappy
+      // Forests: rare & slow; small plants: snappy (fill the world, not the screen with giants)
       if (isForestFinal) {
-        this.vegCooldown =
-          THREE.MathUtils.lerp(0.55, 0.22, Math.min(1, density)) + Math.random() * 0.12;
-        // Still allow a few more plants between forest blocks
-        if (density > 0.7 && Math.random() < 0.35) this.vegCooldown *= 0.55;
+        this.forestCooldown =
+          THREE.MathUtils.lerp(0.85, 0.45, Math.min(1, density)) + Math.random() * 0.2;
+        if (density > 0.75) this.forestCooldown *= 1.15;
+        // Don't stall small flora after a forest lands
+        this.vegCooldown = Math.min(this.vegCooldown || 0, 0.06);
         if (this._forestToastT <= 0 && density >= 0.55) {
           const names = {
             crystalNebula: "CRYSTAL GROVE RISES",
@@ -5337,12 +5607,14 @@
         });
         // Immediate co-op: path through + landmark flanks
         this._coopComposeScene(pred, yaw, density, biome, resonance || 0, playerPos);
-      } else {
+      } else if (isBig) {
+        // Solo trees / spires — moderate rate, still not spam
         this.vegCooldown =
-          THREE.MathUtils.lerp(0.2, 0.05, Math.min(1, density)) + Math.random() * 0.05;
-        if (density > 0.35 && Math.random() < 0.55) {
-          this.vegCooldown *= 0.4;
-        }
+          THREE.MathUtils.lerp(0.28, 0.14, Math.min(1, density)) + Math.random() * 0.06;
+      } else {
+        // Ground flora — plenty along the flanks
+        this.vegCooldown =
+          THREE.MathUtils.lerp(0.09, 0.03, Math.min(1, density)) + Math.random() * 0.02;
       }
 
       this._remember(x, z);
@@ -5367,33 +5639,22 @@
         forceThroughScene: !!kit.pathThroughForest,
         forceLane: true,
       });
-      // One landmark max per compose — walls are flanks, not piles on Bolt
+      // One landmark max per compose — walls are flanks, never piles on Bolt
       if (
         kit.preferLandmark &&
-        this._countLandmarks() < 4 &&
-        Math.random() < Math.min(0.45, kit.landmarkChance * 0.5)
+        this._countLandmarks() < SPAWN_BUDGET.landmarkCap &&
+        Math.random() < Math.min(0.35, kit.landmarkChance * 0.4)
       ) {
         this._spawnTerrain(pred, yaw, density, biome, resonance, this.pools.terrain, playerPos, {
           forceLandmark: true,
         });
       }
-      // Optional second wall only at very high, and only if first landed
-      if (
-        kit.band === "veryHigh" &&
-        this._countLandmarks() < 5 &&
-        Math.random() < 0.35
-      ) {
-        this.terrainCooldown = 0;
-        this._spawnTerrain(pred, yaw, density, biome, resonance, this.pools.terrain, playerPos, {
-          forceLandmark: true,
-          preferCanyon: true,
-        });
-      }
-      // Nested grove ruin — temple / arch / monolith at forest edge
+      // Nested grove ruin — temple / arch / monolith at forest edge (one only)
       let nestedRuin = false;
       if (
         kit.preferGroveRuin &&
-        Math.random() < (kit.groveRuinChance || 0.6)
+        this.pools.ruin.activeCount < SPAWN_BUDGET.ruinCap &&
+        Math.random() < (kit.groveRuinChance || 0.5) * 0.85
       ) {
         nestedRuin = this._spawnRuin(
           pred,
@@ -5411,18 +5672,10 @@
           }
         );
       }
-      // Very high: chance of second smaller ruin piece (arch gateway)
-      if (kit.band === "veryHigh" && nestedRuin && Math.random() < 0.4) {
-        this.ruinCooldown = 0;
-        this._spawnRuin(pred, yaw, density * 0.9, biome, resonance, this.pools.ruin, playerPos, {
-          forceGrove: true,
-          preferTemple: false,
-        });
-      }
 
       this.pathCooldown = Math.min(savedPathCd, 0.25);
-      this.terrainCooldown = Math.max(0.55, Math.min(savedTerrCd, 0.7));
-      this.ruinCooldown = Math.max(0.4, Math.min(savedRuinCd, 0.8));
+      this.terrainCooldown = Math.max(0.7, Math.min(savedTerrCd, 0.95));
+      this.ruinCooldown = Math.max(0.55, Math.min(savedRuinCd, 1.0));
 
       if (this._coopToastT <= 0 && density >= 0.55) {
         if (nestedRuin) {
@@ -5453,14 +5706,20 @@
       coop = coop || null;
       const st = this._scaleStage || "paw";
       const orbital = st === "orbital" || st === "solar" || st === "cosmic";
-      // Harder cap — rocks were burying Bolt at VERYHIGH
-      if (pool.activeCount >= (orbital ? 12 : 16)) return false;
+      // Hard cap — rocks were burying Bolt at high dens
+      if (pool.activeCount >= (orbital ? 10 : SPAWN_BUDGET.terrainCap)) return false;
       if (this.terrainCooldown > 0) return false;
 
-      const origin = playerPos || pred;
+      // Place around predicted future pos (ahead flanks)
+      const origin = pred || playerPos;
       const kit = sceneKit(density, biome.id);
       const landmarkLive = this._countLandmarks();
-      const landmarkCap = kit.band === "veryHigh" ? 5 : kit.band === "high" ? 4 : 2;
+      const landmarkCap =
+        kit.band === "veryHigh"
+          ? SPAWN_BUDGET.landmarkCap
+          : kit.band === "high"
+            ? SPAWN_BUDGET.landmarkCap
+            : 1;
       const scene =
         !orbital &&
         this._findSceneAhead(origin, yaw, {
@@ -5514,33 +5773,35 @@
       }
 
       if (!isLandmark) {
-        // Rocks/ridges on flanks — wide bubble, never in run corridor
+        // Rocks/ridges on pure flanks — never in run corridor
         const placed = this._placeAround(origin, yaw, {
           orbital: orbital,
           minR: orbital ? 32 : CLEAR.terrainMin,
-          maxR: orbital ? 90 : CLEAR.terrainMax + density * 12,
+          maxR: orbital ? 90 : CLEAR.terrainMax + density * 10,
           preferSide: true,
+          solid: true,
+          strictSides: true,
           clearR: orbital ? 28 : CLEAR.terrainClear,
-          corridorHalf: orbital ? 0 : CLEAR.corridorHalf + 2,
+          corridorHalf: orbital ? 0 : CLEAR.corridorHalf + 4,
           blockCorridor: !orbital,
-          stackMin: orbital ? 20 : 14,
+          stackMin: orbital ? 22 : 18,
           jitter: orbital ? 5 : 2.4,
         });
         if (!placed) return false;
         x = placed.x;
         z = placed.z;
-        // High band landmarks only if under cap and far enough
+        // Landmarks only if under cap and far enough
         if (
           !orbital &&
           landmarkLive < landmarkCap &&
           kit.preferLandmark &&
-          Math.random() < kit.landmarkChance * 0.28
+          Math.random() < kit.landmarkChance * 0.18
         ) {
           isLandmark = true;
         }
       }
 
-      // Final safety: never place rock near Bolt
+      // Final safety: never place rock near Bolt or on highway
       if (!orbital && this._tooCloseToPlayer(x, z, CLEAR.player)) return false;
       if (
         !orbital &&
@@ -5548,7 +5809,7 @@
           x,
           z,
           yaw,
-          CLEAR.corridorHalf,
+          CLEAR.corridorHalf + 3,
           CLEAR.corridorAhead,
           CLEAR.corridorBehind
         )
@@ -5592,11 +5853,12 @@
         const baseAlt = st === "cosmic" ? 50 : st === "solar" ? 38 : 26;
         y = Math.max(origin.y, surface) + baseAlt * 0.55 + Math.random() * 30;
       }
+      // Landmarks impressive but farther; small rocks stay modest so Bolt stays visible
       const scale = orbital
         ? 2.4 + density * 1.6
         : isLandmark
-          ? 1.15 + density * 0.55
-          : 1.0 + density * 0.35;
+          ? 1.05 + density * 0.4
+          : 0.75 + density * 0.22;
       const life =
         14 +
         density * 10 +
@@ -5642,10 +5904,10 @@
       }
 
       this.terrainCooldown = orbital
-        ? 0.9 + Math.random() * 0.5
+        ? 1.0 + Math.random() * 0.55
         : isLandmark
-          ? 0.85 + Math.random() * 0.45
-          : 0.7 + Math.random() * 0.4 - density * 0.1;
+          ? 1.15 + Math.random() * 0.5
+          : 0.95 + Math.random() * 0.45;
       this._remember(x, z);
       this.stats.spawned++;
       return true;
@@ -5669,12 +5931,14 @@
       const rx = Math.cos(yaw);
       const rz = -Math.sin(yaw);
 
+      // Paths use player for start (lane under feet), pred for forest search
       const origin = playerPos || pred;
+      const searchOrigin = pred || origin;
       const kit = sceneKit(density, biome.id);
       const scene =
         !orbital &&
         kit.pathThroughForest &&
-        this._findSceneAhead(origin, yaw, {
+        this._findSceneAhead(searchOrigin, yaw, {
           maxDist: 100,
           needPath: !(coop && coop.forceThroughScene),
         });
@@ -5683,7 +5947,7 @@
         !orbital &&
         coop &&
         coop.forceThroughScene &&
-        this._findSceneAhead(origin, yaw, { maxDist: 100, needPath: false });
+        this._findSceneAhead(searchOrigin, yaw, { maxDist: 100, needPath: false });
 
       const useScene = sceneForce || scene;
       let pathGuide = null;
@@ -5713,11 +5977,11 @@
         };
       } else {
         // Path always starts IN FRONT of Bolt so he runs into a glowing corridor
-        const minAhead = orbital ? 22 : 14;
-        const maxAhead = orbital ? 75 : 28 + density * 12;
+        const minAhead = orbital ? 22 : 12;
+        const maxAhead = orbital ? 75 : 26 + density * 14;
         const ahead = minAhead + Math.random() * (maxAhead - minAhead);
         // Tiny side offset only — path stays centered on run line
-        const side = (Math.random() - 0.5) * (orbital ? 14 : 2.2);
+        const side = (Math.random() - 0.5) * (orbital ? 14 : 1.6);
         x = origin.x + fx * ahead + rx * side;
         z = origin.z + fz * ahead + rz * side;
         if (!orbital && density > 0.55) {
@@ -5860,6 +6124,7 @@
       this._coopToastT = Math.max(0, (this._coopToastT || 0) - dt);
       this._tickSceneFootprints(dt);
       this._lastPlayerPos = playerPos;
+      if (typeof yaw === "number") this._lastYaw = yaw;
 
       const score = this.scoreSys.update(packet, dt);
       // Scale factors from Seamless Scale Shifting
@@ -5917,13 +6182,16 @@
       let mVeg = sc.vegMul != null ? sc.vegMul : 1;
       let mRuin = sc.ruinMul != null ? sc.ruinMul : 1;
       let mDet = sc.detailMul != null ? sc.detailMul : 1;
-      // Surface floors — path always strong; terrain kept milder so Bolt stays visible
+      // Surface floors — path always strong; high dens reduces rock/detail clutter
+      // but vegetation (small flora) stays rich on the flanks
       if (surfaceScale) {
-        mVeg = Math.max(1.25, mVeg);
-        mDet = Math.max(1.1, mDet);
-        mTerr = Math.min(mTerr, 0.85); // never amplify rock spam
-        mPath = Math.max(1.65, mPath); // always paint a corridor ahead
-        mRuin = Math.max(1.0, mRuin);
+        mPath = Math.max(1.7, mPath); // always paint a corridor ahead
+        mTerr = Math.min(mTerr, 0.7); // never amplify rock spam
+        mRuin = Math.min(Math.max(0.85, mRuin), 1.05);
+        const hi = THREE.MathUtils.smoothstep(density, 0.45, 1.1);
+        mDet = Math.max(0.35, (mDet || 1) * (1.05 - hi * 0.55));
+        // More plants at higher dens (small types); forests still self-capped
+        mVeg = Math.max(1.15, Math.min(1.55, (mVeg || 1) * (1.2 + hi * 0.2)));
       }
       // Orbital: force veg off, boost ruin/path priority
       if (orbital) {
@@ -5937,6 +6205,7 @@
       this.pathCooldown = Math.max(0, (this.pathCooldown || 0) - dt);
       this.terrainCooldown = Math.max(0, (this.terrainCooldown || 0) - dt);
       this.vegCooldown = Math.max(0, (this.vegCooldown || 0) - dt);
+      this.forestCooldown = Math.max(0, (this.forestCooldown || 0) - dt);
       this.ruinCooldown = Math.max(0, (this.ruinCooldown || 0) - dt);
       this.detailCooldown = Math.max(0, (this.detailCooldown || 0) - dt);
 
@@ -5995,18 +6264,25 @@
         }
         this.cooldown = THREE.MathUtils.lerp(0.48, 0.22, Math.min(1, density));
       } else {
-        // --- SURFACE: path corridor first, then flanks (never bury Bolt) ---
-        // PATH always — clear glowing lane so Bolt is never trapped in rocks
+        // --- SURFACE GOLDEN PIPELINE ---
+        // 1 Paths · 2 Terrain flanks · 3 Ruins far · 4 Veg flanks · 5 Sparse details
+        // Never bury Bolt; high dens = better large pieces, fewer small clutter.
+        const B = SPAWN_BUDGET;
+        let tSpawned = 0;
+        let vSpawned = 0;
+        let rSpawned = 0;
+        let dSpawned = 0;
+        let pSpawned = 0;
+
+        // 1. PATH first — always keep a readable highway
         if (mPath > 0.05) {
-          const pathCap = 5;
-          // Force lane if none or only one path live
           if (this.pools.path.activeCount < 2) {
             this.pathCooldown = 0;
             if (
               this._spawnPath(
                 pred,
                 yaw,
-                Math.min(1.4, d * mPath + 0.25),
+                Math.min(1.35, d * mPath + 0.2),
                 biome,
                 res,
                 this.pools.path,
@@ -6015,59 +6291,51 @@
               )
             ) {
               any = true;
+              pSpawned++;
             }
           }
           if (
-            this.pools.path.activeCount < pathCap ||
-            Math.random() < (0.9 + coreMul * 0.15) * mPath
+            pSpawned < B.pathPerTick &&
+            this.pools.path.activeCount < B.pathCap &&
+            Math.random() < (0.75 + coreMul * 0.1) * mPath
           ) {
-            if (this._spawnOne("path", pred, yaw, Math.min(1.35, d * mPath), biome, res)) any = true;
-          }
-          // Extra forward lane at high density (through forests if available)
-          if (density > 0.45 && Math.random() < 0.5 * mPath) {
-            if (
-              this._spawnPath(pred, yaw, d * mPath, biome, res, this.pools.path, playerPos, {
-                forceLane: true,
-              })
-            ) {
+            if (this._spawnOne("path", pred, yaw, Math.min(1.3, d * mPath), biome, res)) {
               any = true;
+              pSpawned++;
             }
           }
         }
-        // Terrain — throttled; only flanks, capped
+
+        // 2. TERRAIN — max 1 per tick, hard live cap, pure flanks
         if (
           mTerr > 0.08 &&
-          this.pools.terrain.activeCount < 12 &&
-          Math.random() < (0.35 + density * 0.2) * mTerr
+          tSpawned < B.terrainPerTick &&
+          this.pools.terrain.activeCount < B.terrainCap &&
+          Math.random() < (0.22 + density * 0.12) * mTerr
         ) {
-          if (this._spawnOne("terrain", pred, yaw, d * mTerr, biome, res)) any = true;
-        }
-        // Vegetation — forests on flanks (corridor blocked in _placeAround)
-        if (mVeg > 0.05) {
-          const vegChance =
-            (0.75 + density * 0.4 + (biome.weights.vegetation || 0.2) * 0.45 + coreMul * 0.25) * mVeg;
-          const vegCap = Math.floor((22 + coreMul * 10) * Math.min(1.4, mVeg));
-          const vegBursts = 1 + Math.floor(density * 2 + coreMul);
-          for (let vi = 0; vi < vegBursts; vi++) {
-            if (this.pools.vegetation.activeCount < vegCap || Math.random() < vegChance) {
-              if (this._spawnOne("vegetation", pred, yaw, d * mVeg, biome, res)) any = true;
-            }
+          if (this._spawnOne("terrain", pred, yaw, d * mTerr, biome, res)) {
+            any = true;
+            tSpawned++;
           }
         }
-        // Ruins — prefer nesting into open forest scenes first, then distant flanks
-        if (mRuin > 0.08) {
-          const ruinCap = 5 + Math.floor(coreRuin * 4);
-          const openGrove = this._findSceneAhead(playerPos || pred, yaw, {
-            maxDist: 100,
+
+        // 3. RUINS — rare, far, prefer forest edge once
+        if (
+          mRuin > 0.08 &&
+          rSpawned < B.ruinPerTick &&
+          this.pools.ruin.activeCount < B.ruinCap
+        ) {
+          const openGrove = this._findSceneAhead(pred || playerPos, yaw, {
+            maxDist: 110,
             needRuin: true,
           });
-          if (openGrove && Math.random() < 0.55 + density * 0.25) {
+          if (openGrove && Math.random() < 0.35 + density * 0.15) {
             this.ruinCooldown = 0;
             if (
               this._spawnRuin(
                 pred,
                 yaw,
-                Math.min(1.25, d * mRuin),
+                Math.min(1.15, d * mRuin),
                 biome,
                 res,
                 this.pools.ruin,
@@ -6076,38 +6344,81 @@
               )
             ) {
               any = true;
+              rSpawned++;
             }
           }
-          const ruinChance =
-            (0.32 + density * 0.35 + res * 0.25 + (biome.weights.ruin || 0.15) * 0.5 + coreRuin) * mRuin;
-          if (this.pools.ruin.activeCount < ruinCap || Math.random() < ruinChance) {
-            if (this._spawnOne("ruin", pred, yaw, Math.min(1.25, d * (0.95 + mRuin * 0.3)), biome, res)) any = true;
+          if (
+            rSpawned < B.ruinPerTick &&
+            Math.random() < (0.18 + density * 0.15 + res * 0.12 + coreRuin * 0.35) * mRuin
+          ) {
+            if (this._spawnOne("ruin", pred, yaw, Math.min(1.15, d * mRuin), biome, res)) {
+              any = true;
+              rSpawned++;
+            }
           }
         }
-        // Details — RICH variety on flanks
-        if (mDet > 0.06) {
+
+        // 4. VEGETATION — rich small flora on flanks; forests/big trees self-capped
+        if (mVeg > 0.05 && this.pools.vegetation.activeCount < B.vegCap) {
+          const vegChance =
+            (0.72 + density * 0.28 + (biome.weights.vegetation || 0.2) * 0.4 + coreMul * 0.15) * mVeg;
+          for (let vi = 0; vi < B.vegPerTick; vi++) {
+            if (vSpawned >= B.vegPerTick) break;
+            if (this.pools.vegetation.activeCount >= B.vegCap) break;
+            if (Math.random() < vegChance * (vi === 0 ? 1 : 0.75)) {
+              if (this._spawnOne("vegetation", pred, yaw, d * mVeg, biome, res)) {
+                any = true;
+                vSpawned++;
+              }
+            }
+          }
+        }
+
+        // 5. DETAILS last — sparsest at high dens (reduce clutter in view)
+        if (
+          mDet > 0.06 &&
+          dSpawned < B.detailPerTick &&
+          this.pools.detail.activeCount < B.detailCap
+        ) {
           const detailChance =
-            (0.95 + density * 0.5 + res * 0.4 + (biome.weights.detail || 0.2) * 0.55 + coreDetail) * mDet;
-          const detCap = Math.floor((32 + coreDetail * 28) * Math.max(1, mDet));
-          if (this.pools.detail.activeCount < detCap || Math.random() < detailChance) {
-            if (this._spawnOne("detail", pred, yaw, d * mDet, biome, res)) any = true;
-          }
-          const bursts = 2 + Math.floor((density * 3 + res * 1.8 + coreDetail * 3.5) * mDet);
-          for (let bi = 0; bi < bursts; bi++) {
-            if (Math.random() < (0.8 + density * 0.35 + coreDetail * 0.45) * Math.min(1.5, mDet)) {
-              if (this._spawnOne("detail", pred, yaw, d * mDet, biome, res)) any = true;
+            (0.35 + density * 0.12 + res * 0.15 + (biome.weights.detail || 0.2) * 0.25) *
+            mDet *
+            (1.0 - THREE.MathUtils.clamp(density - 0.5, 0, 0.5) * 0.7);
+          if (Math.random() < detailChance) {
+            if (this._spawnOne("detail", pred, yaw, d * mDet * 0.75, biome, res)) {
+              any = true;
+              dSpawned++;
             }
           }
         }
 
-        // Extra weighted random spawns for variety
-        const extra = n + 3 + Math.floor(density * 2);
-        for (let i = 0; i < extra; i++) {
+        // Optional single weighted pick — never terrain spam, prefer path/veg/detail
+        if (Math.random() < 0.35 + density * 0.1) {
           const kind = this._pickKind(biome, d);
-          if (this._spawnOne(kind, pred, yaw, d, biome, res)) any = true;
+          if (kind === "path" && pSpawned < B.pathPerTick && this.pools.path.activeCount < B.pathCap) {
+            if (this._spawnOne("path", pred, yaw, d, biome, res)) any = true;
+          } else if (
+            kind === "vegetation" &&
+            vSpawned < B.vegPerTick &&
+            this.pools.vegetation.activeCount < B.vegCap
+          ) {
+            if (this._spawnOne("vegetation", pred, yaw, d * mVeg, biome, res)) {
+              any = true;
+              vSpawned++;
+            }
+          } else if (
+            kind === "detail" &&
+            dSpawned < B.detailPerTick &&
+            this.pools.detail.activeCount < B.detailCap &&
+            density < 0.85
+          ) {
+            if (this._spawnOne("detail", pred, yaw, d * 0.7, biome, res)) any = true;
+          }
+          // terrain/ruin only via dedicated branches above
         }
 
-        this.cooldown = THREE.MathUtils.lerp(0.18, 0.06, Math.min(1, density));
+        // Slightly slower ticks at high dens so world stays readable
+        this.cooldown = THREE.MathUtils.lerp(0.22, 0.1, Math.min(1, density * 0.85));
       }
 
       if (any && Math.random() < 0.28 + density * 0.15) {
@@ -6186,6 +6497,8 @@
     RUIN_TYPES: RUIN_TYPES,
     DETAIL_TYPES: DETAIL_TYPES,
     BiomeAtmosphere: BiomeAtmosphere,
+    CLEAR: CLEAR,
+    SPAWN_BUDGET: SPAWN_BUDGET,
     SPAWN_THRESHOLD: SPAWN_THRESHOLD,
     BIOME_CELL: BIOME_CELL,
     BIOMES: BIOMES,
@@ -6200,6 +6513,9 @@
     DENSITY_BANDS: DENSITY_BANDS,
     densityBand: densityBand,
     sceneKit: sceneKit,
+    forestDensity: forestDensity,
+    forestDensityNear: forestDensityNear,
+    forestWarpStrength: forestWarpStrength,
     VEG_TYPES: VEG_TYPES,
   };
 })(typeof window !== "undefined" ? window : globalThis);
