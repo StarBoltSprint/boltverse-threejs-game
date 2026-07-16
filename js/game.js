@@ -122,28 +122,40 @@
   let pointerLocked = false;
   let paused = false;
   let started = false;
-  let yaw = 0;
-  let pitch = 0.18;
+  let yaw = 0; // camera orbit yaw (also WASD facing)
+  // Third-person elevation: 0 = horizon · higher = more overhead (default behind-and-up)
+  let pitch = 0.36;
+  const PITCH_DEFAULT = 0.36;
+  const PITCH_MIN = 0.12;
+  const PITCH_MAX = 0.82;
   // Camera zoom: 1 = default · scroll / [ ] · lower = closer · higher = farther
   let camZoom = 1;
   let camZoomTarget = 1;
-  const CAM_ZOOM_MIN = 0.45;
-  const CAM_ZOOM_MAX = 2.8;
+  const CAM_ZOOM_MIN = 0.55;
+  const CAM_ZOOM_MAX = 2.4;
 
   // Mouse look — stable across high-DPI mice / Windows / multi-monitor spikes
-  // (raw movementX/Y can be huge on some machines and fling pitch/yaw)
-  const LOOK_SENS = 0.00165; // radians per CSS pixel (slightly calmer default)
-  const LOOK_MAX_STEP = 48; // clamp single-event delta (px)
-  const LOOK_MAX_FRAME = 96; // clamp accumulated delta per frame (px)
+  const LOOK_SENS = 0.00155;
+  const LOOK_MAX_STEP = 48;
+  const LOOK_MAX_FRAME = 90;
   let lookAccumX = 0;
   let lookAccumY = 0;
-  let lookIgnoreEvents = 0; // drop junk events right after pointer lock
+  let lookIgnoreEvents = 0;
+  let lookDragging = false; // allow orbit without pointer lock (click-drag)
 
   function setCamZoom(z) {
     camZoomTarget = THREE.MathUtils.clamp(z, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
   }
 
-  /** Apply queued mouse look once per frame (predictable, no multi-event explosions) */
+  function resetThirdPersonCam() {
+    pitch = PITCH_DEFAULT;
+    camZoom = 1;
+    camZoomTarget = 1;
+    lookAccumX = 0;
+    lookAccumY = 0;
+  }
+
+  /** Apply queued mouse look once per frame */
   function applyLookInput() {
     let dx = lookAccumX;
     let dy = lookAccumY;
@@ -155,11 +167,18 @@
     dy = THREE.MathUtils.clamp(dy, -LOOK_MAX_FRAME, LOOK_MAX_FRAME);
     if (dx === 0 && dy === 0) return;
     yaw -= dx * LOOK_SENS;
-    // Invert Y: mouse-up → look up
-    pitch += dy * LOOK_SENS;
-    pitch = THREE.MathUtils.clamp(pitch, -1.25, 1.15);
+    // Mouse up → more horizon (lower elevation); mouse down → higher / more top-down
+    pitch -= dy * LOOK_SENS;
+    pitch = THREE.MathUtils.clamp(pitch, PITCH_MIN, PITCH_MAX);
     if (!isFinite(yaw)) yaw = 0;
-    if (!isFinite(pitch)) pitch = 0.18;
+    if (!isFinite(pitch)) pitch = PITCH_DEFAULT;
+  }
+
+  function tryPointerLock() {
+    if (!canvas || paused) return;
+    try {
+      if (canvas.requestPointerLock) canvas.requestPointerLock();
+    } catch (e) { /* ignore */ }
   }
 
   // ---------------------------------------------------------------------------
@@ -266,24 +285,40 @@
       lookIgnoreEvents = 3;
       lookAccumX = 0;
       lookAccumY = 0;
+      lookDragging = false;
     } else {
       lookAccumX = 0;
       lookAccumY = 0;
     }
   });
 
+  // Orbit: pointer lock OR click-and-drag on the canvas (works even if lock fails)
+  canvas.addEventListener("mousedown", function (e) {
+    if (!started || paused) return;
+    if (e.button === 0 || e.button === 2) {
+      lookDragging = true;
+      tryPointerLock();
+    }
+  });
+  window.addEventListener("mouseup", function () {
+    lookDragging = false;
+  });
+  canvas.addEventListener("contextmenu", function (e) {
+    if (started) e.preventDefault();
+  });
+
   document.addEventListener("mousemove", (e) => {
-    if (!pointerLocked || paused) return;
+    if (paused || !started) return;
+    // Need lock or active drag to orbit (cam always follows Bolt either way)
+    if (!pointerLocked && !lookDragging) return;
     if (lookIgnoreEvents > 0) {
       lookIgnoreEvents--;
       return;
     }
-    // Some systems report non-finite or enormous deltas (high-DPI / raw input)
     let mx = e.movementX;
     let my = e.movementY;
     if (!isFinite(mx)) mx = 0;
     if (!isFinite(my)) my = 0;
-    // Ignore pathological single frames (alt-tab, display change, driver glitch)
     if (Math.abs(mx) > 400 || Math.abs(my) > 400) return;
     mx = THREE.MathUtils.clamp(mx, -LOOK_MAX_STEP, LOOK_MAX_STEP);
     my = THREE.MathUtils.clamp(my, -LOOK_MAX_STEP, LOOK_MAX_STEP);
@@ -4391,43 +4426,52 @@
     // Cyan rim — subtle pulse with power, never a second sun
     rim.intensity = 0.45 + state.momentum * 0.55 + csNow.worldMul * 0.35 + (state.sprinting ? 0.25 : 0);
 
-    // Camera follows Seamless Scale camMul + citadel proximity + juice
+    // —— Third-person chase cam: always locked on Bolt ——
+    // Sits behind + above, looks at Bolt's chest. Mouse orbits around him.
     const distToCit = Math.hypot(player.position.x, player.position.z);
     const nearCitadel = distToCit < (citadel.scale || 5) * 50;
     const scaleCam = (state.scaleProps && state.scaleProps.camMul) || 1;
     const citCam = nearCitadel && state.transitionProgress < 0.35 ? 1.35 : 1;
-    // Smooth zoom (scroll / [ ])
     if (!isFinite(camZoom)) camZoom = 1;
     if (!isFinite(camZoomTarget)) camZoomTarget = 1;
     camZoom = damp(camZoom, camZoomTarget, 10, dt);
+    // Comfortable 3rd-person distance (not extreme top-down)
     const camDist = Math.max(
-      2.5,
-      (8.4 - state.momentum * 1.1) * scaleCam * citCam * camZoom
+      4.2,
+      (9.2 - state.momentum * 0.85) * scaleCam * citCam * camZoom
     );
-    // Free-look orbit: pitch aims camera up/down
-    const safePitch = THREE.MathUtils.clamp(
-      isFinite(pitch) ? pitch : 0.18,
-      -1.35,
-      1.25
+    const elev = THREE.MathUtils.clamp(
+      isFinite(pitch) ? pitch : PITCH_DEFAULT,
+      PITCH_MIN,
+      PITCH_MAX
     );
-    pitch = safePitch;
-    const cp = Math.cos(safePitch);
-    const spLook = Math.sin(safePitch);
-    const lookDirX = Math.sin(yaw) * cp;
-    const lookDirY = spLook;
-    const lookDirZ = Math.cos(yaw) * cp;
-    const focusY = 1.35;
+    pitch = elev;
+    // Soft auto-align camera behind Bolt when sprinting (still orbitable)
+    if (state.sprinting && moveSpeed > 4 && boltMesh) {
+      const wantYaw = boltMesh.rotation.y;
+      let dY = wantYaw - yaw;
+      while (dY > Math.PI) dY -= Math.PI * 2;
+      while (dY < -Math.PI) dY += Math.PI * 2;
+      // Gentle pull toward behind-character when not hard-looking opposite
+      if (Math.abs(dY) < 2.2) {
+        yaw = dampAngle(yaw, wantYaw, 1.8, dt);
+      }
+    }
+    const cosE = Math.cos(elev);
+    const sinE = Math.sin(elev);
+    // Position: behind Bolt along -forward, raised by elevation
+    const backX = -Math.sin(yaw) * cosE;
+    const backZ = -Math.cos(yaw) * cosE;
+    const focusY = 1.25;
     const shake = juice.shake;
-    const sx = shake > 0 ? (Math.random() - 0.5) * shake * 1.4 : 0;
-    const sy = shake > 0 ? (Math.random() - 0.5) * shake * 1.1 : 0;
-    const sz = shake > 0 ? (Math.random() - 0.5) * shake * 1.4 : 0;
-    // Camera sits behind look direction; slight upward bias keeps Bolt in frame
+    const sx = shake > 0 ? (Math.random() - 0.5) * shake * 1.2 : 0;
+    const sy = shake > 0 ? (Math.random() - 0.5) * shake * 0.9 : 0;
+    const sz = shake > 0 ? (Math.random() - 0.5) * shake * 1.2 : 0;
     const camTarget = tmpV.set(
-      player.position.x - lookDirX * camDist + sx,
-      player.position.y + focusY - lookDirY * camDist + 1.1 * Math.max(0.15, cp) + sy,
-      player.position.z - lookDirZ * camDist + sz
+      player.position.x + backX * camDist + sx,
+      player.position.y + focusY + sinE * camDist * 0.95 + 0.35 + sy,
+      player.position.z + backZ * camDist + sz
     );
-    // Hard-set if camera went invalid (NaN freeze bug)
     if (
       !isFinite(camera.position.x) ||
       !isFinite(camera.position.y) ||
@@ -4435,12 +4479,14 @@
     ) {
       camera.position.copy(camTarget);
     } else {
-      camera.position.lerp(camTarget, 1 - Math.exp(-10 * dt));
+      // Snappy follow so Bolt stays framed
+      camera.position.lerp(camTarget, 1 - Math.exp(-12 * dt));
     }
+    // Always look at Bolt (locked on character — not free-look into sky)
     const lookAt = tmpV2.set(
-      player.position.x + lookDirX * 8 + sx * 0.25,
-      player.position.y + focusY + lookDirY * 8 + sy * 0.25,
-      player.position.z + lookDirZ * 8 + sz * 0.25
+      player.position.x + sx * 0.15,
+      player.position.y + focusY + 0.15 + sy * 0.15,
+      player.position.z + sz * 0.15
     );
     camera.lookAt(lookAt);
     // Sky locked to FINAL camera pos (avoids sphere-limb "bubble" if updated earlier)
@@ -4798,11 +4844,12 @@
     pauseEl.classList.toggle("hidden", !paused);
     if (paused) {
       if (document.exitPointerLock) document.exitPointerLock();
+      lookDragging = false;
       updatePauseStats();
       updateProgressFromRun();
       saveProgress();
     } else {
-      canvas.requestPointerLock();
+      tryPointerLock();
       clock.getDelta();
     }
   }
@@ -4812,7 +4859,12 @@
     hud.classList.remove("hidden");
     started = true;
     paused = false;
-    canvas.requestPointerLock();
+    resetThirdPersonCam();
+    // Align camera behind spawn facing
+    if (boltMesh) yaw = boltMesh.rotation.y;
+    tryPointerLock();
+    // Retry lock once — some browsers need a second gesture frame
+    setTimeout(tryPointerLock, 120);
     progress.stats.runs = (progress.stats.runs || 0) + 1;
     // Legacy of the Pack: remembered Core stage soft-starts Resonance
     if (progress.bestCoreIndex >= 2) {
@@ -4863,7 +4915,7 @@
     if (paused) togglePause();
   });
   canvas.addEventListener("click", function () {
-    if (started && !paused && !pointerLocked) canvas.requestPointerLock();
+    if (started && !paused) tryPointerLock();
   });
 
   // Pause GPU work when the tab is hidden (same visuals when you return)
