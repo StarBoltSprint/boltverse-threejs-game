@@ -93,39 +93,39 @@
       PERF.forestOctaves = 3;
       PERF.forestAttempts = 8;
       PERF.forestNearSamples = 3;
-      PERF.vegCap = 28;
-      PERF.forestCap = 3;
-      PERF.bigVegCap = 5;
+      PERF.vegCap = 48;
+      PERF.forestCap = 4;
+      PERF.bigVegCap = 7;
       PERF.terrainCap = 5;
       PERF.ruinCap = 3;
       PERF.detailCap = 14;
       PERF.pathCap = 4;
-      PERF.vegPerTick = 2;
+      PERF.vegPerTick = 4;
       PERF.detailPerTick = 1;
       PERF.terrainPerTick = 1;
       PERF.pathPerTick = 2;
       PERF.ruinPerTick = 1;
-      PERF.spawnCooldownMul = 1.0;
-      MAX_ACTIVE = 100;
+      PERF.spawnCooldownMul = 0.95;
+      MAX_ACTIVE = 120;
     } else {
-      // high
+      // high — richer flora; path + Bolt exclusion still hard
       PERF.forestOctaves = 3;
       PERF.forestAttempts = 6;
       PERF.forestNearSamples = 2;
-      PERF.vegCap = 20;
-      PERF.forestCap = 2;
-      PERF.bigVegCap = 4;
+      PERF.vegCap = 36;
+      PERF.forestCap = 3;
+      PERF.bigVegCap = 6;
       PERF.terrainCap = 4;
       PERF.ruinCap = 2;
-      PERF.detailCap = 10;
+      PERF.detailCap = 12;
       PERF.pathCap = 3;
-      PERF.vegPerTick = 2;
+      PERF.vegPerTick = 3;
       PERF.detailPerTick = 1;
       PERF.terrainPerTick = 1;
       PERF.pathPerTick = 1;
       PERF.ruinPerTick = 1;
-      PERF.spawnCooldownMul = 1.1;
-      MAX_ACTIVE = 75;
+      PERF.spawnCooldownMul = 1.0;
+      MAX_ACTIVE = 95;
     }
     // Allow explicit overrides
     if (q.vegCap != null) PERF.vegCap = q.vegCap;
@@ -144,10 +144,11 @@
     detailMin: 36,
     detailClear: 34,
     detailMax: 70,
-    vegMin: 42,
-    vegClear: 40,
-    vegBigMin: 52,
-    vegBigClear: 50,
+    // Small flora can sit nearer path edges (still outside player bubble + corridor)
+    vegMin: 34,
+    vegClear: 32,
+    vegBigMin: 48,
+    vegBigClear: 46,
     forestMin: 64,
     forestClear: 60,
     forestMax: 110,
@@ -245,8 +246,9 @@
     else if (bid === "rosePulse") vegBias = 1.15;
     else if (bid === "emberVoid") vegBias = 0.95;
     else if (bid === "whisperStars") {
-      vegBias = 0.72;
-      sparseBias = 1.45;
+      // Still dreamy clearings, but not a barren starfield highway
+      vegBias = 1.05;
+      sparseBias = 1.15;
     } else if (bid === "frostGlacier") {
       vegBias = 0.65;
       sparseBias = 1.35;
@@ -322,14 +324,14 @@
       kit.groveRuinChance = 0.32;
       kit.groveTempleChance = 0.14;
     } else if (band.id === "high") {
-      // Full forest systems on flanks — fewer plants, wider lane
+      // Full forest systems on flanks — richer undergrowth, clear highway
       kit.preferForest = true;
-      kit.forestChance = 0.55 * vegBias;
+      kit.forestChance = 0.6 * vegBias;
       kit.forestRadius = (12 + d * 9) * Math.min(1.25, sparseBias);
-      kit.groundCount = Math.floor((6 + d * 8) * vegBias);
-      kit.midCount = Math.floor((4 + d * 6) * vegBias);
-      kit.canopyCount = Math.floor((3 + d * 5) * vegBias);
-      kit.megaChance = 0.08 * vegBias;
+      kit.groundCount = Math.floor((8 + d * 10) * vegBias);
+      kit.midCount = Math.floor((5 + d * 7) * vegBias);
+      kit.canopyCount = Math.floor((4 + d * 6) * vegBias);
+      kit.megaChance = 0.1 * vegBias;
       kit.corridor = 8.5; // highway through the chaos
       kit.lifeMul = 1.35;
       kit.scaleMul = 1.0;
@@ -344,14 +346,14 @@
       kit.groveRuinChance = 0.55;
       kit.groveTempleChance = 0.35;
     } else {
-      // Very high — impressive flanks, not a wall of rocks on Bolt
+      // Very high — denser flanks, path corridor still wide
       kit.preferForest = true;
-      kit.forestChance = 0.68 * vegBias;
+      kit.forestChance = 0.72 * vegBias;
       kit.forestRadius = (16 + d * 12) * Math.min(1.3, sparseBias);
-      kit.groundCount = Math.floor((8 + d * 10) * vegBias);
-      kit.midCount = Math.floor((6 + d * 8) * vegBias);
-      kit.canopyCount = Math.floor((4 + d * 7) * vegBias);
-      kit.megaChance = 0.16 * vegBias;
+      kit.groundCount = Math.floor((10 + d * 12) * vegBias);
+      kit.midCount = Math.floor((7 + d * 9) * vegBias);
+      kit.canopyCount = Math.floor((5 + d * 8) * vegBias);
+      kit.megaChance = 0.18 * vegBias;
       kit.corridor = 10.5; // widest clear lane at top speed
       kit.lifeMul = 1.55;
       kit.scaleMul = 1.06;
@@ -368,9 +370,11 @@
     }
 
     // Hard caps for performance + readability (one entity = whole forest)
-    kit.groundCount = Math.min(kit.groundCount, 14);
-    kit.midCount = Math.min(kit.midCount, 12);
-    kit.canopyCount = Math.min(kit.canopyCount, 10);
+    // HIGH/MAX allow denser packs; Low/Med still limited by PERF veg/forest caps
+    const denseForest = PERF.tier === "high" || PERF.tier === "veryHigh";
+    kit.groundCount = Math.min(kit.groundCount, denseForest ? 18 : 12);
+    kit.midCount = Math.min(kit.midCount, denseForest ? 14 : 10);
+    kit.canopyCount = Math.min(kit.canopyCount, denseForest ? 12 : 8);
     return kit;
   }
 
@@ -4587,7 +4591,7 @@
       this.pools = {
         path: new ObjectPool(createPathMesh, "path", 8),
         terrain: new ObjectPool(createTerrainMesh, "terrain", 10),
-        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 28),
+        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 56),
         ruin: new ObjectPool(createRuinMesh, "ruin", 6),
         detail: new ObjectPool(createDetailMesh, "detail", 16),
       };
@@ -5515,7 +5519,7 @@
       // Sparse biomes / clearings skip more often (small plants less strict)
       const clearThresh =
         biome.id === "whisperStars"
-          ? 0.42
+          ? 0.28
           : biome.id === "frostGlacier"
             ? 0.38
             : biome.id === "emberVoid"
@@ -5523,7 +5527,7 @@
               : 0.22;
       // Domain-warp density needed to open a full forest system
       const forestDensMin =
-        biome.id === "emberVoid" ? 0.3 : biome.id === "whisperStars" ? 0.36 : 0.32;
+        biome.id === "emberVoid" ? 0.3 : biome.id === "whisperStars" ? 0.3 : 0.32;
 
       // Full forests only when cooldown ready, under cap, and density field is a thicket
       const forestCap =
