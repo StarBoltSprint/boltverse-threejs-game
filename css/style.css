@@ -251,6 +251,70 @@ html, body {
   width: 100%;
 }
 
+/* Graphics quality tiers (boot + pause) */
+.gfx-tier {
+  width: 100%;
+  margin: 0.35rem 0 0.55rem;
+  padding: 0.55rem 0.65rem 0.5rem;
+  border-radius: 12px;
+  border: 1px solid rgba(61, 240, 255, 0.2);
+  background: rgba(4, 10, 22, 0.55);
+  text-align: left;
+}
+.gfx-tier-label {
+  font-family: "Orbitron", sans-serif;
+  font-size: 0.52rem;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+.gfx-tier-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.35rem;
+}
+.gfx-tier-btn {
+  font-family: "Orbitron", sans-serif;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.45rem 0.2rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+.gfx-tier-btn:hover {
+  border-color: rgba(61, 240, 255, 0.45);
+  color: var(--text);
+}
+.gfx-tier-btn.is-active {
+  border-color: rgba(61, 240, 255, 0.75);
+  background: linear-gradient(145deg, rgba(34, 211, 238, 0.2), rgba(168, 85, 247, 0.15));
+  color: var(--cyan);
+  box-shadow: 0 0 16px rgba(61, 240, 255, 0.25);
+}
+.gfx-tier-hint {
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+}
+.gfx-tier-pause {
+  margin: 0.85rem 0 1rem;
+  text-align: center;
+}
+.gfx-tier-pause .gfx-tier-label {
+  text-align: center;
+}
+.gfx-tier-pause .gfx-tier-hint {
+  text-align: center;
+}
+
 #start-btn, #resume-btn {
   position: relative;
   font-family: "Orbitron", sans-serif;

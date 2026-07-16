@@ -722,8 +722,8 @@
         need.call(self, ix, iz);
       };
 
-      // Base radius (always ≥ 2 from quality floors)
-      const view = Math.max(2, VIEW);
+      // Base radius from quality tier (Low may use view=1)
+      const view = Math.max(1, VIEW);
       for (let dz = -view; dz <= view; dz++) {
         for (let dx = -view; dx <= view; dx++) {
           add(cx + dx, cz + dz);
@@ -920,14 +920,31 @@
     }
 
     /**
-     * Adaptive quality — lowers chunk radius / mesh segs / dressing without
-     * changing art style (same materials & generators).
+     * Adaptive quality — chunk radius / mesh segs / dressing.
+     * Same art style; only density & range change.
      */
     setQuality(q) {
       if (!q) return;
-      if (q.view != null) VIEW = Math.max(2, Math.min(4, q.view | 0));
-      if (q.groundSegs != null) GROUND_SEGS = Math.max(28, Math.min(48, q.groundSegs | 0));
-      if (q.dressMul != null) DRESS_MUL = Math.max(0.55, Math.min(1.35, q.dressMul));
+      if (q.view != null) VIEW = Math.max(1, Math.min(4, q.view | 0));
+      if (q.groundSegs != null) GROUND_SEGS = Math.max(20, Math.min(48, q.groundSegs | 0));
+      if (q.dressMul != null) DRESS_MUL = Math.max(0.35, Math.min(1.4, q.dressMul));
+      if (q.rebuild) this.rebuildStreaming();
+    }
+
+    /** Drop all chunks so next ensureAround rebuilds at current segs/dress */
+    rebuildStreaming() {
+      if (!this.chunks) return;
+      this.chunks.forEach((ch) => {
+        if (!ch || !ch.group) return;
+        this.group.remove(ch.group);
+        ch.group.traverse(function (o) {
+          if (o.geometry) o.geometry.dispose();
+          // materials often shared/cached — do not dispose maps
+        });
+      });
+      this.chunks.clear();
+      this._lastCx = null;
+      this._lastCz = null;
     }
 
     heightAt(x, z) {

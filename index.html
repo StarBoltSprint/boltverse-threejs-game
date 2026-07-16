@@ -20,7 +20,7 @@
     <div class="boot-shell">
       <header class="boot-top">
         <span class="boot-chip">SPIRAL-47</span>
-        <span class="boot-chip boot-chip-dim">v2.4 · MAX</span>
+        <span class="boot-chip boot-chip-dim">v2.4 · HIGH</span>
       </header>
       <div class="boot-card">
         <div class="boot-logo" aria-hidden="true">
@@ -41,6 +41,17 @@
           <div class="boot-key"><kbd>R</kbd><span>Recall</span></div>
           <div class="boot-key"><kbd>F</kbd><span>Fullscreen</span></div>
           <div class="boot-key"><kbd>ESC</kbd><span>Pause</span></div>
+        </div>
+
+        <div class="gfx-tier" role="group" aria-label="Graphics quality">
+          <div class="gfx-tier-label">GRAPHICS</div>
+          <div class="gfx-tier-row" id="boot-gfx-tier">
+            <button type="button" class="gfx-tier-btn" data-tier="low" title="Best performance">LOW</button>
+            <button type="button" class="gfx-tier-btn" data-tier="medium" title="Balanced">MED</button>
+            <button type="button" class="gfx-tier-btn" data-tier="high" title="High quality">HIGH</button>
+            <button type="button" class="gfx-tier-btn" data-tier="veryHigh" title="Maximum quality">MAX</button>
+          </div>
+          <p class="gfx-tier-hint" id="boot-gfx-hint">High — full detail · recommended</p>
         </div>
 
         <div class="boot-actions">
@@ -68,7 +79,7 @@
 
   <div id="hud" class="hidden">
     <div class="hud-top">
-      <div class="brand">BOLT ENGINE <span>v2.4 · MAX</span></div>
+      <div class="brand">BOLT ENGINE <span>v2.4 · HIGH</span></div>
       <div id="scale-badge" class="scale-badge scale-paw" aria-live="polite">
         <span class="scale-badge-label">SCALE</span>
         <span class="scale-badge-name" id="scale-badge-name">PAW</span>
@@ -178,6 +189,16 @@
       <h2>PAUSED</h2>
       <p>Sprint data frozen. The universe waits.</p>
       <div id="pause-stats" class="pause-stats"></div>
+      <div class="gfx-tier gfx-tier-pause" role="group" aria-label="Graphics quality">
+        <div class="gfx-tier-label">GRAPHICS</div>
+        <div class="gfx-tier-row" id="pause-gfx-tier">
+          <button type="button" class="gfx-tier-btn" data-tier="low">LOW</button>
+          <button type="button" class="gfx-tier-btn" data-tier="medium">MED</button>
+          <button type="button" class="gfx-tier-btn" data-tier="high">HIGH</button>
+          <button type="button" class="gfx-tier-btn" data-tier="veryHigh">MAX</button>
+        </div>
+        <p class="gfx-tier-hint" id="pause-gfx-hint">Change anytime · saved for next run</p>
+      </div>
       <p class="pause-hint"><kbd>P</kbd> Pack Memory · <kbd>L</kbd> Decrees · Gate ≥65%</p>
       <button id="resume-btn" type="button">RESUME SPRINT</button>
     </div>

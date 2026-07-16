@@ -351,25 +351,165 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Renderer / scene
+  // Renderer / scene — selectable graphics tiers (Low → Very High / MAX)
   // ---------------------------------------------------------------------------
-  // Fixed high graphics — no FPS-based downgrade (user preference)
-  const GraphicsQuality = {
-    pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-    bloom: true,
-    bloomStrength: 0.58,
-    bloomDiv: 2,
-    shadows: true,
-    shadowMap: 2048,
-    groundSegs: 44,
-    view: 3,
-    dressMul: 1.1,
-    hemi: 0.52,
+  const GFX_STORAGE_KEY = "bolt_gfx_tier_v1";
+  const GFX_TIERS = {
+    low: {
+      id: "low",
+      label: "LOW",
+      hint: "Low — best performance · lighter world",
+      brand: "v2.4 · LOW",
+      pixelRatio: 1,
+      antialias: false,
+      bloom: false,
+      bloomStrength: 0.35,
+      bloomDiv: 3,
+      shadows: false,
+      shadowMap: 512,
+      groundSegs: 22,
+      view: 1,
+      dressMul: 0.4,
+      hemi: 0.48,
+      particles: false,
+      particleOp: 0.35,
+      particleSize: 1.0,
+      exposure: 1.02,
+    },
+    medium: {
+      id: "medium",
+      label: "MED",
+      hint: "Medium — balanced quality & performance",
+      brand: "v2.4 · MED",
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.25),
+      antialias: true,
+      bloom: true,
+      bloomStrength: 0.42,
+      bloomDiv: 3,
+      shadows: true,
+      shadowMap: 1024,
+      groundSegs: 32,
+      view: 2,
+      dressMul: 0.7,
+      hemi: 0.5,
+      particles: true,
+      particleOp: 0.55,
+      particleSize: 1.2,
+      exposure: 1.05,
+    },
+    high: {
+      id: "high",
+      label: "HIGH",
+      hint: "High — full detail · recommended",
+      brand: "v2.4 · HIGH",
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.75),
+      antialias: true,
+      bloom: true,
+      bloomStrength: 0.52,
+      bloomDiv: 2,
+      shadows: true,
+      shadowMap: 1536,
+      groundSegs: 40,
+      view: 3,
+      dressMul: 1.0,
+      hemi: 0.52,
+      particles: true,
+      particleOp: 0.72,
+      particleSize: 1.4,
+      exposure: 1.08,
+    },
+    veryHigh: {
+      id: "veryHigh",
+      label: "MAX",
+      hint: "MAX — highest fidelity · strong GPU recommended",
+      brand: "v2.4 · MAX",
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      antialias: true,
+      bloom: true,
+      bloomStrength: 0.58,
+      bloomDiv: 2,
+      shadows: true,
+      shadowMap: 2048,
+      groundSegs: 44,
+      view: 3,
+      dressMul: 1.15,
+      hemi: 0.52,
+      particles: true,
+      particleOp: 0.82,
+      particleSize: 1.55,
+      exposure: 1.08,
+    },
   };
+
+  function loadGfxTierId() {
+    try {
+      const t = localStorage.getItem(GFX_STORAGE_KEY);
+      if (t && GFX_TIERS[t]) return t;
+    } catch (e) { /* ignore */ }
+    return "high";
+  }
+
+  let gfxTierId = loadGfxTierId();
+  let GraphicsQuality = Object.assign({}, GFX_TIERS[gfxTierId]);
+
+  function setGraphicsTier(tierId, opts) {
+    opts = opts || {};
+    if (!GFX_TIERS[tierId]) tierId = "high";
+    gfxTierId = tierId;
+    GraphicsQuality = Object.assign({}, GFX_TIERS[tierId]);
+    try {
+      localStorage.setItem(GFX_STORAGE_KEY, tierId);
+    } catch (e) { /* ignore */ }
+    applyGraphicsQuality({ rebuild: !!opts.rebuild });
+    syncGfxTierUI();
+    // Brand chips
+    const brandChip = document.querySelector(".boot-chip-dim");
+    if (brandChip) brandChip.textContent = GraphicsQuality.brand;
+    const brandHud = document.querySelector(".brand span");
+    if (brandHud) brandHud.textContent = GraphicsQuality.brand;
+    if (opts.toast && typeof toast === "function") {
+      toast("GRAPHICS · " + GraphicsQuality.label + " — " + GraphicsQuality.hint.replace(/^[^—]+—\s*/, ""), 2200);
+    }
+  }
+
+  function syncGfxTierUI() {
+    const rows = [
+      document.getElementById("boot-gfx-tier"),
+      document.getElementById("pause-gfx-tier"),
+    ];
+    rows.forEach(function (row) {
+      if (!row) return;
+      row.querySelectorAll(".gfx-tier-btn").forEach(function (btn) {
+        btn.classList.toggle("is-active", btn.getAttribute("data-tier") === gfxTierId);
+      });
+    });
+    const hints = [
+      document.getElementById("boot-gfx-hint"),
+      document.getElementById("pause-gfx-hint"),
+    ];
+    hints.forEach(function (el) {
+      if (el) el.textContent = GraphicsQuality.hint;
+    });
+  }
+
+  function wireGfxTierRow(rowId) {
+    const row = document.getElementById(rowId);
+    if (!row) return;
+    row.addEventListener("click", function (e) {
+      const btn = e.target && e.target.closest ? e.target.closest(".gfx-tier-btn") : null;
+      if (!btn) return;
+      const tier = btn.getAttribute("data-tier");
+      if (!tier || tier === gfxTierId) return;
+      setGraphicsTier(tier, {
+        rebuild: started, // rebuild terrain density when already in world
+        toast: started,
+      });
+    });
+  }
 
   const renderer = new THREE.WebGLRenderer({
     canvas,
-    antialias: true,
+    antialias: !!GraphicsQuality.antialias,
     powerPreference: "high-performance",
     // stencil off = less bandwidth; depth is enough for this game
     stencil: false,
@@ -378,32 +518,40 @@
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
-  renderer.shadowMap.enabled = true;
+  renderer.toneMappingExposure = GraphicsQuality.exposure != null ? GraphicsQuality.exposure : 1.08;
+  renderer.shadowMap.enabled = !!GraphicsQuality.shadows;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   // Auto-sort is fine; local clipping unused
   renderer.localClippingEnabled = false;
   // Only recompute shadows when something that casts moves (Bolt + few casters)
   renderer.shadowMap.autoUpdate = true;
 
-  /** Apply fixed high visual settings once systems exist */
-  function applyGraphicsQuality() {
+  /** Apply current graphics tier to renderer / world / FX */
+  function applyGraphicsQuality(opts) {
+    opts = opts || {};
     const q = GraphicsQuality;
     renderer.setPixelRatio(q.pixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMappingExposure = q.exposure != null ? q.exposure : 1.08;
     renderer.shadowMap.enabled = !!q.shadows;
     if (sun && sun.shadow && sun.shadow.mapSize) {
-      sun.shadow.mapSize.set(q.shadowMap, q.shadowMap);
-      sun.castShadow = true;
+      sun.shadow.mapSize.set(q.shadowMap || 1024, q.shadowMap || 1024);
+      sun.castShadow = !!q.shadows;
       if (sun.shadow.map) {
         sun.shadow.map.dispose();
         sun.shadow.map = null;
       }
     }
     if (bloom) {
-      if (bloom.setEnabled) bloom.setEnabled(true);
-      if (bloom.setQuality) bloom.setQuality({ bloom: true, bloomDiv: q.bloomDiv, bloomStrength: q.bloomStrength });
-      if (bloom.setStrength) bloom.setStrength(q.bloomStrength);
+      if (bloom.setEnabled) bloom.setEnabled(!!q.bloom);
+      if (bloom.setQuality) {
+        bloom.setQuality({
+          bloom: !!q.bloom,
+          bloomDiv: q.bloomDiv,
+          bloomStrength: q.bloomStrength,
+        });
+      }
+      if (bloom.setStrength && q.bloomStrength != null) bloom.setStrength(q.bloomStrength);
       if (bloom.resize) bloom.resize(window.innerWidth, window.innerHeight);
     }
     if (openWorld && openWorld.setQuality) {
@@ -411,17 +559,50 @@
         view: q.view,
         groundSegs: q.groundSegs,
         dressMul: q.dressMul,
+        rebuild: !!opts.rebuild,
       });
+      if (opts.rebuild && player && openWorld.ensureAround) {
+        openWorld.ensureAround(player.position.x, player.position.z, {
+          vx: state && state.vel ? state.vel.x : 0,
+          vz: state && state.vel ? state.vel.z : 0,
+          lookYaw: typeof yaw === "number" ? yaw : 0,
+        });
+      } else if (opts.rebuild && openWorld.ensureAround) {
+        openWorld.ensureAround(0, 0);
+      }
     }
     if (lights && lights.hemi) lights.hemi.intensity = q.hemi;
-    if (softParticles && softParticles.points) softParticles.points.visible = true;
-    if (softParticles && softParticles.material) {
-      softParticles.material.opacity = 0.82;
-      softParticles.material.size = 1.55;
+    if (softParticles && softParticles.points) {
+      softParticles.points.visible = q.particles !== false;
     }
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
+    if (softParticles && softParticles.material) {
+      softParticles.material.opacity = q.particleOp != null ? q.particleOp : 0.7;
+      softParticles.material.size = q.particleSize != null ? q.particleSize : 1.4;
+    }
+    // Reactive sky still runs at all tiers (cheap vs particles/shadows); hide nebula soft sheets on Low
+    if (reactiveSky && reactiveSky.group) {
+      reactiveSky.group.traverse(function (o) {
+        if (o.name === "SkyNebulae") o.visible = q.id !== "low";
+        if (o.name === "SkyComets") o.visible = q.id !== "low";
+      });
+    }
+    if (camera) {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    }
   }
+
+  // Wire UI early (DOM already parsed — script at end of body)
+  wireGfxTierRow("boot-gfx-tier");
+  wireGfxTierRow("pause-gfx-tier");
+  syncGfxTierUI();
+  // Sync brand chips to saved tier on load
+  (function syncBrandOnLoad() {
+    const brandChip = document.querySelector(".boot-chip-dim");
+    if (brandChip) brandChip.textContent = GraphicsQuality.brand;
+    const brandHud = document.querySelector(".brand span");
+    if (brandHud) brandHud.textContent = GraphicsQuality.brand;
+  })();
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x061428);
@@ -541,7 +722,7 @@
 
   // Infinite open world — chunked streaming terrain (no island walls)
   const openWorld = new window.BoltOpenWorld.OpenWorld(scene);
-  // Lock high graphics (no FPS filter)
+  // Apply selected tier (terrain density / view)
   try {
     applyGraphicsQuality();
   } catch (qErr) {
