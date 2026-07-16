@@ -17,7 +17,7 @@
     }
     return;
   }
-  if (statusEl) statusEl.textContent = "Ready — click the button.";
+  if (statusEl) statusEl.textContent = "SYSTEMS ONLINE · READY";
 
   if (!window.BoltProcedural || !window.BoltProcedural.ProceduralSpawner) {
     if (statusEl) {
@@ -63,6 +63,8 @@
   const spawnStatsEl = document.getElementById("spawn-stats");
   const startBtn = document.getElementById("start-btn");
   const resumeBtn = document.getElementById("resume-btn");
+  const bootFsBtn = document.getElementById("boot-fs-btn");
+  const fsBtn = document.getElementById("fs-btn");
   const gateFlashEl = document.getElementById("gate-flash");
   const gateBannerEl = document.getElementById("gate-banner");
   const decreePanelEl = document.getElementById("decree-panel");
@@ -132,8 +134,79 @@
     camZoomTarget = THREE.MathUtils.clamp(z, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
   }
 
+  // ---------------------------------------------------------------------------
+  // Fullscreen
+  // ---------------------------------------------------------------------------
+  function isFullscreen() {
+    return !!(
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.msFullscreenElement
+    );
+  }
+  function syncFullscreenUI() {
+    const on = isFullscreen();
+    document.body.classList.toggle("is-fs", on);
+    if (bootFsBtn) {
+      bootFsBtn.classList.toggle("is-active", on);
+      bootFsBtn.textContent = on ? "EXIT FULLSCREEN" : "FULLSCREEN";
+    }
+    if (fsBtn) {
+      fsBtn.classList.toggle("is-active", on);
+      fsBtn.title = on ? "Exit fullscreen (F)" : "Toggle fullscreen (F)";
+      fsBtn.setAttribute("aria-label", on ? "Exit fullscreen" : "Fullscreen");
+    }
+  }
+  function toggleFullscreen() {
+    try {
+      if (!isFullscreen()) {
+        const el = document.documentElement;
+        const req =
+          el.requestFullscreen ||
+          el.webkitRequestFullscreen ||
+          el.msRequestFullscreen;
+        if (req) {
+          const p = req.call(el);
+          if (p && p.catch) p.catch(function () {});
+        }
+      } else {
+        const exit =
+          document.exitFullscreen ||
+          document.webkitExitFullscreen ||
+          document.msExitFullscreen;
+        if (exit) {
+          const p = exit.call(document);
+          if (p && p.catch) p.catch(function () {});
+        }
+      }
+    } catch (errFs) {
+      console.warn("fullscreen", errFs);
+    }
+  }
+  document.addEventListener("fullscreenchange", syncFullscreenUI);
+  document.addEventListener("webkitfullscreenchange", syncFullscreenUI);
+  if (bootFsBtn) bootFsBtn.addEventListener("click", function (e) {
+    e.preventDefault();
+    toggleFullscreen();
+  });
+  if (fsBtn) fsBtn.addEventListener("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleFullscreen();
+  });
+  syncFullscreenUI();
+
   window.addEventListener("keydown", (e) => {
     keys[e.code] = true;
+    // Fullscreen (F) — works on boot screen and in-game
+    if (e.code === "KeyF" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // Don't steal F when typing in a field (none now, but safe)
+      const tag = (e.target && e.target.tagName) || "";
+      if (tag !== "INPUT" && tag !== "TEXTAREA") {
+        e.preventDefault();
+        toggleFullscreen();
+      }
+    }
     if (e.code === "Escape" && started) togglePause();
     if (e.code === "KeyH" && started && !paused) howl();
     if (e.code === "KeyR" && started && !paused) recallToCitadel();
@@ -224,14 +297,69 @@
   // ---------------------------------------------------------------------------
   // Renderer / scene
   // ---------------------------------------------------------------------------
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // Fixed high graphics — no FPS-based downgrade (user preference)
+  const GraphicsQuality = {
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+    bloom: true,
+    bloomStrength: 0.58,
+    bloomDiv: 2,
+    shadows: true,
+    shadowMap: 2048,
+    groundSegs: 44,
+    view: 3,
+    dressMul: 1.1,
+    hemi: 0.52,
+  };
+
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.setPixelRatio(GraphicsQuality.pixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.02;
+  renderer.toneMappingExposure = 1.08;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  /** Apply fixed high visual settings once systems exist */
+  function applyGraphicsQuality() {
+    const q = GraphicsQuality;
+    renderer.setPixelRatio(q.pixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = !!q.shadows;
+    if (sun && sun.shadow && sun.shadow.mapSize) {
+      sun.shadow.mapSize.set(q.shadowMap, q.shadowMap);
+      sun.castShadow = true;
+      if (sun.shadow.map) {
+        sun.shadow.map.dispose();
+        sun.shadow.map = null;
+      }
+    }
+    if (bloom) {
+      if (bloom.setEnabled) bloom.setEnabled(true);
+      if (bloom.setQuality) bloom.setQuality({ bloom: true, bloomDiv: q.bloomDiv, bloomStrength: q.bloomStrength });
+      if (bloom.setStrength) bloom.setStrength(q.bloomStrength);
+      if (bloom.resize) bloom.resize(window.innerWidth, window.innerHeight);
+    }
+    if (openWorld && openWorld.setQuality) {
+      openWorld.setQuality({
+        view: q.view,
+        groundSegs: q.groundSegs,
+        dressMul: q.dressMul,
+      });
+    }
+    if (lights && lights.hemi) lights.hemi.intensity = q.hemi;
+    if (softParticles && softParticles.points) softParticles.points.visible = true;
+    if (softParticles && softParticles.material) {
+      softParticles.material.opacity = 0.82;
+      softParticles.material.size = 1.55;
+    }
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+  }
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x061428);
@@ -240,8 +368,13 @@
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2500);
   const clock = new THREE.Clock();
 
-  // Graphics polish: sky, haze, planets, selective bloom + grade, particles
-  const skyDome = window.BoltGraphics.createSkyDome(scene);
+  // Graphics polish: reactive sky (sprint/scale/biome) + haze, planets, bloom
+  const reactiveSky = window.BoltGraphics.createReactiveSky
+    ? window.BoltGraphics.createReactiveSky(scene)
+    : null;
+  const skyDome = reactiveSky
+    ? reactiveSky.dome
+    : window.BoltGraphics.createSkyDome(scene);
   const horizonHaze = window.BoltGraphics.createHorizonHaze
     ? window.BoltGraphics.createHorizonHaze(scene)
     : null;
@@ -255,7 +388,8 @@
     : null;
   const bloom = window.BoltGraphics.createSoftBloom(renderer, scene, camera);
   if (bloom.applyDomPolish) bloom.applyDomPolish(canvas);
-  const softParticles = window.BoltGraphics.createParticleField(scene, 900);
+  // Ambient dust / motes
+  const softParticles = window.BoltGraphics.createParticleField(scene, 780);
 
   // Biome atmosphere — sky/fog/lights shift as you enter new regions
   const biomeAtmo = new window.BoltProcedural.BiomeAtmosphere();
@@ -265,6 +399,7 @@
     const h = window.innerHeight;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+    renderer.setPixelRatio(GraphicsQuality.pixelRatio);
     renderer.setSize(w, h);
     if (bloom && bloom.resize) bloom.resize(w, h);
   });
@@ -283,11 +418,15 @@
   coreLight.position.set(0, 14, 0);
   scene.add(coreLight);
 
-  // Cosmic starfield — soft multi-color stars, nebulae, twinkle (no hard squares)
+  // Cosmic starfield — owned by reactive sky when present (avoid double field)
   let starField = null;
   let starFieldMat = null;
   let cosmicStars = null;
-  if (window.BoltGraphics.createCosmicStarfield) {
+  if (reactiveSky && reactiveSky.stars) {
+    cosmicStars = reactiveSky.stars;
+    starField = cosmicStars.group || cosmicStars;
+    starFieldMat = cosmicStars.material;
+  } else if (window.BoltGraphics.createCosmicStarfield) {
     cosmicStars = window.BoltGraphics.createCosmicStarfield(scene);
     starField = cosmicStars.group || cosmicStars;
     starFieldMat = cosmicStars.material;
@@ -340,6 +479,12 @@
 
   // Infinite open world — chunked streaming terrain (no island walls)
   const openWorld = new window.BoltOpenWorld.OpenWorld(scene);
+  // Lock high graphics (no FPS filter)
+  try {
+    applyGraphicsQuality();
+  } catch (qErr) {
+    console.warn("graphics quality", qErr);
+  }
   openWorld.ensureAround(0, 18);
   // Soft landing pads near spawn (not world limits)
   addCollider(0, 0, 16, openWorld.heightAt(0, 0) + 1, "citadel");
@@ -478,219 +623,293 @@
    * StarBoltSprint — pure white German Shepherd matching key art
    * (cyan lightning eyes/aura, no wings, Z-forward for yaw).
    */
+  /**
+   * StarBoltSprint mesh — GSD silhouette, cool white + slate saddle, cyan energy accents.
+   * Polish tiers 1–7: silhouette, materials, structure, anim hooks, lights, sprint FX, rim.
+   */
   function makeBoltMesh() {
     const g = new THREE.Group();
     g.name = "StarBoltSprint";
-    g.scale.setScalar(1.85);
+    g.scale.setScalar(1.95);
 
     const Gfx = window.BoltGraphics;
-    const furMap = Gfx && Gfx.getFurTexture ? Gfx.getFurTexture() : null;
     const softMap =
       Gfx && Gfx.getSoftSpriteTexture ? Gfx.getSoftSpriteTexture() : null;
+    const kit =
+      Gfx && Gfx.makeBoltMaterials
+        ? Gfx.makeBoltMaterials()
+        : null;
 
-    // Cool white fur — LOW emissive so form reads (key + fill lights shape him)
-    const fur = new THREE.MeshStandardMaterial({
-      map: furMap,
-      color: 0xffffff,
-      roughness: 0.62,
-      metalness: 0.03,
-      emissive: 0xd0dcf0,
-      emissiveIntensity: 0.12,
-    });
-    const furBright = new THREE.MeshStandardMaterial({
-      map: furMap,
-      color: 0xffffff,
-      roughness: 0.55,
-      metalness: 0.02,
-      emissive: 0xe4ecf8,
-      emissiveIntensity: 0.16,
-    });
-    const furShade = new THREE.MeshStandardMaterial({
-      map: furMap,
-      color: 0xe8eef6,
-      roughness: 0.7,
-      metalness: 0.03,
-      emissive: 0xb8c8dc,
-      emissiveIntensity: 0.08,
-    });
-    // Energy accents only (eyes, collar, core) — selective bloom picks these up
-    const energy = new THREE.MeshStandardMaterial({
-      color: 0x7dd3fc,
-      emissive: 0x22d3ee,
-      emissiveIntensity: 1.35,
-      roughness: 0.25,
-      metalness: 0.45,
-    });
-    const energyHot = new THREE.MeshStandardMaterial({
-      color: 0xa5f3fc,
-      emissive: 0x22d3ee,
-      emissiveIntensity: 1.8,
-      roughness: 0.18,
-      metalness: 0.4,
-    });
-    const energySoft = new THREE.MeshBasicMaterial({
-      color: 0x67e8f9,
-      transparent: true,
-      opacity: 0.14,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-    });
-    // Eyes: readable cyan, not nuclear
-    const iris = new THREE.MeshStandardMaterial({
-      color: 0x9ae6ff,
-      emissive: 0x22d3ee,
-      emissiveIntensity: 1.9,
-      roughness: 0.15,
-      metalness: 0.3,
-    });
-    const pupil = new THREE.MeshStandardMaterial({
-      color: 0x050a12,
-      roughness: 0.4,
-      metalness: 0.1,
-    });
-    const noseMat = new THREE.MeshStandardMaterial({
-      color: 0x0f172a,
-      roughness: 0.3,
-      metalness: 0.35,
-    });
-    const padMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
-      roughness: 0.88,
-      metalness: 0.05,
-    });
-    const pinkEar = new THREE.MeshStandardMaterial({
-      color: 0xffb6c8,
-      roughness: 0.8,
-      metalness: 0,
-    });
+    const fur = kit
+      ? kit.fur
+      : new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, emissive: 0xa0b0c8, emissiveIntensity: 0.04 });
+    const furBright = kit ? kit.furBright : fur;
+    const furShade = kit ? kit.furShade : fur;
+    const furSaddle = kit ? kit.furSaddle : furShade;
+    const energy = kit
+      ? kit.energy
+      : new THREE.MeshStandardMaterial({ color: 0x7dd3fc, emissive: 0x22d3ee, emissiveIntensity: 1.2 });
+    const energyHot = kit ? kit.energyHot : energy;
+    const energyPurple = kit
+      ? kit.energyPurple
+      : new THREE.MeshStandardMaterial({
+          color: 0xd8b4fe,
+          emissive: 0xa855f7,
+          emissiveIntensity: 1.4,
+        });
+    const energySoft = kit
+      ? kit.energySoft
+      : new THREE.MeshBasicMaterial({
+          color: 0x67e8f9,
+          transparent: true,
+          opacity: 0.12,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+        });
+    const energySoftPurple = kit
+      ? kit.energySoftPurple
+      : new THREE.MeshBasicMaterial({
+          color: 0xc084fc,
+          transparent: true,
+          opacity: 0.1,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+        });
+    const energyVein = kit
+      ? kit.energyVein
+      : new THREE.MeshBasicMaterial({
+          color: 0xa5f3fc,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        });
+    const iris = kit ? kit.iris : energy;
+    const pupil = kit
+      ? kit.pupil
+      : new THREE.MeshStandardMaterial({ color: 0x050a12, roughness: 0.5 });
+    const noseMat = kit
+      ? kit.noseMat
+      : new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3 });
+    const padMat = kit
+      ? kit.padMat
+      : new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
+    const pinkEar = kit
+      ? kit.pinkEar
+      : new THREE.MeshStandardMaterial({ color: 0xffb6c8, roughness: 0.85 });
 
-    // ---- BODY: athletic GSD (key-art proportions) ----
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 1.15, 12, 20), fur);
+    // ---- BODY: lean athletic GSD ----
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 1.22, 12, 20), fur);
     torso.rotation.x = Math.PI / 2;
-    torso.position.set(0, 1.0, 0.0);
-    torso.scale.set(0.95, 1, 1.08);
+    torso.position.set(0, 1.08, 0.02);
+    torso.scale.set(0.88, 1, 1.05);
     torso.castShadow = true;
     g.add(torso);
 
-    // Soft white “saddle” (cool grey only — never brown)
-    const saddle = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.8, 10, 14), furShade);
+    // Soft white volume on back (pure white GSD — no dark saddle patch)
+    const saddle = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.95, 10, 16), fur);
     saddle.rotation.x = Math.PI / 2;
-    saddle.position.set(0, 1.22, -0.06);
-    saddle.scale.set(0.72, 1, 0.48);
+    saddle.position.set(0, 1.28, -0.04);
+    saddle.scale.set(0.78, 1.05, 0.52);
+    saddle.castShadow = true;
     g.add(saddle);
+    const saddleHip = new THREE.Mesh(new THREE.SphereGeometry(0.36, 16, 16), fur);
+    saddleHip.position.set(0, 1.18, -0.48);
+    saddleHip.scale.set(1.05, 0.75, 1.0);
+    g.add(saddleHip);
 
-    const chest = new THREE.Mesh(new THREE.SphereGeometry(0.52, 20, 20), furBright);
-    chest.position.set(0, 1.0, 0.52);
-    chest.scale.set(1.08, 1.1, 1.2);
+    const chest = new THREE.Mesh(new THREE.SphereGeometry(0.5, 20, 20), furBright);
+    chest.position.set(0, 1.05, 0.55);
+    chest.scale.set(1.05, 1.12, 1.18);
     chest.castShadow = true;
     g.add(chest);
 
-    // Big fluffy neck ruff (key art)
-    const ruff = new THREE.Mesh(new THREE.SphereGeometry(0.48, 16, 16), furBright);
-    ruff.position.set(0, 1.12, 0.62);
-    ruff.scale.set(1.35, 0.85, 0.95);
-    g.add(ruff);
-    const ruff2 = new THREE.Mesh(new THREE.SphereGeometry(0.36, 14, 14), furBright);
-    ruff2.position.set(0, 1.22, 0.72);
-    ruff2.scale.set(1.2, 0.7, 0.9);
-    g.add(ruff2);
+    // Layered neck ruff (volume without blob)
+    for (let i = 0; i < 4; i++) {
+      const ruff = new THREE.Mesh(
+        new THREE.SphereGeometry(0.42 - i * 0.05, 14, 14),
+        i % 2 === 0 ? furBright : fur
+      );
+      ruff.position.set(0, 1.14 + i * 0.05, 0.58 + i * 0.08);
+      ruff.scale.set(1.25 - i * 0.08, 0.72 + i * 0.04, 0.88);
+      ruff.castShadow = i < 2;
+      g.add(ruff);
+    }
 
-    const neck = new THREE.Mesh(new THREE.SphereGeometry(0.3, 14, 14), furBright);
-    neck.position.set(0, 1.28, 0.82);
-    neck.scale.set(1.15, 0.95, 1.05);
+    const neck = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 14), furBright);
+    neck.position.set(0, 1.36, 0.9);
+    neck.scale.set(1.1, 0.95, 1.05);
     g.add(neck);
 
-    const hip = new THREE.Mesh(new THREE.SphereGeometry(0.42, 18, 18), fur);
-    hip.position.set(0, 0.95, -0.52);
-    hip.scale.set(1.1, 1.0, 1.15);
+    const hip = new THREE.Mesh(new THREE.SphereGeometry(0.4, 18, 18), fur);
+    hip.position.set(0, 1.0, -0.55);
+    hip.scale.set(1.05, 0.95, 1.1);
     hip.castShadow = true;
     g.add(hip);
 
-    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 14), furBright);
-    belly.position.set(0, 0.74, 0.06);
-    belly.scale.set(0.92, 0.68, 1.5);
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.3, 14, 14), furBright);
+    belly.position.set(0, 0.78, 0.08);
+    belly.scale.set(0.85, 0.62, 1.45);
     g.add(belly);
 
-    // ---- HEAD: long GSD wedge, alert expression ----
+    // Soft fur shell (very light fluff — high opacity caused a “bubble” read)
+    const shell = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.42, 1.05, 8, 12),
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.9,
+        metalness: 0,
+        transparent: true,
+        opacity: 0.06,
+        depthWrite: false,
+      })
+    );
+    shell.rotation.x = Math.PI / 2;
+    shell.position.set(0, 1.12, 0.05);
+    shell.scale.set(0.95, 1, 1.1);
+    g.add(shell);
+
+    // Body energy aura shell — cyan/purple, opacity driven by sprint score
+    const energyShell = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.48, 1.15, 10, 16),
+      energySoft.clone()
+    );
+    energyShell.material.opacity = 0;
+    energyShell.rotation.x = Math.PI / 2;
+    energyShell.position.set(0, 1.12, 0.02);
+    energyShell.scale.set(1.02, 1.05, 1.12);
+    energyShell.renderOrder = 2;
+    g.add(energyShell);
+    g.userData.energyShell = energyShell;
+
+    // Spine energy vein (shoulder → hip → tail) — lightning path on white fur
+    const veinMats = [];
+    const spineVein = new THREE.Group();
+    spineVein.position.set(0, 1.32, 0.35);
+    const veinPts = [
+      [0, 0, 0.35],
+      [0, 0.02, 0.05],
+      [0, 0.0, -0.35],
+      [0, -0.05, -0.7],
+      [0, -0.12, -1.0],
+    ];
+    for (let i = 0; i < veinPts.length - 1; i++) {
+      const a = veinPts[i];
+      const b = veinPts[i + 1];
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) || 0.2;
+      const vm = energyVein.clone();
+      veinMats.push(vm);
+      const seg = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.035 + i * 0.008, len * 0.85, 4, 8),
+        vm
+      );
+      seg.position.set(mid[0], mid[1], mid[2]);
+      // aim along local Z of spine
+      seg.rotation.x = Math.PI / 2 + Math.atan2(b[1] - a[1], b[2] - a[2]);
+      spineVein.add(seg);
+    }
+    g.add(spineVein);
+    g.userData.spineVein = spineVein;
+    g.userData.veinMats = veinMats;
+
+    // Shoulder energy blazes
+    function makeShoulderBlaze(side) {
+      const blaze = new THREE.Mesh(
+        new THREE.SphereGeometry(0.14, 10, 10),
+        energySoftPurple.clone()
+      );
+      blaze.material.opacity = 0;
+      blaze.position.set(side * 0.32, 1.22, 0.35);
+      blaze.scale.set(1.1, 0.7, 1.3);
+      g.add(blaze);
+      return blaze;
+    }
+    g.userData.shoulderBlaze = [makeShoulderBlaze(1), makeShoulderBlaze(-1)];
+
+    // ---- HEAD: sharp GSD wedge + mask ----
     const head = new THREE.Group();
-    head.position.set(0, 1.48, 1.05);
+    head.position.set(0, 1.58, 1.12);
     g.add(head);
     g.userData.head = head;
 
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.36, 20, 20), furBright);
-    skull.scale.set(0.98, 0.95, 1.18);
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.34, 20, 20), furBright);
+    skull.scale.set(0.95, 0.92, 1.22);
     skull.castShadow = true;
     head.add(skull);
 
-    const crown = new THREE.Mesh(new THREE.SphereGeometry(0.24, 14, 14), fur);
-    crown.position.set(0, 0.16, -0.1);
-    crown.scale.set(1.15, 0.72, 0.95);
+    // White face volume (no dark mask — pure white shepherd)
+    const mask = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 16), furBright);
+    mask.position.set(0, 0.04, 0.06);
+    mask.scale.set(0.88, 0.75, 0.95);
+    head.add(mask);
+
+    const crown = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 14), furBright);
+    crown.position.set(0, 0.18, -0.08);
+    crown.scale.set(1.1, 0.65, 0.9);
     head.add(crown);
 
-    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.08, 0.22), furShade);
-    brow.position.set(0, 0.12, 0.22);
-    brow.rotation.x = 0.18;
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.07, 0.2), fur);
+    brow.position.set(0, 0.14, 0.24);
+    brow.rotation.x = 0.2;
     head.add(brow);
 
-    const cheekL = new THREE.Mesh(new THREE.SphereGeometry(0.15, 14, 14), furBright);
-    cheekL.position.set(0.2, -0.05, 0.1);
-    cheekL.scale.set(0.95, 0.9, 1.15);
+    const cheekL = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 12), furBright);
+    cheekL.position.set(0.19, -0.04, 0.12);
+    cheekL.scale.set(0.9, 0.85, 1.1);
     head.add(cheekL);
     const cheekR = cheekL.clone();
-    cheekR.position.x = -0.2;
+    cheekR.position.x = -0.19;
     head.add(cheekR);
 
-    // Longer GSD snout
-    const snout = new THREE.Mesh(new THREE.CapsuleGeometry(0.125, 0.48, 10, 14), furBright);
+    const snout = new THREE.Mesh(new THREE.CapsuleGeometry(0.115, 0.52, 10, 14), furBright);
     snout.rotation.x = Math.PI / 2;
-    snout.position.set(0, -0.02, 0.48);
-    snout.scale.set(0.98, 1, 0.88);
+    snout.position.set(0, -0.02, 0.5);
+    snout.scale.set(0.95, 1, 0.85);
     head.add(snout);
-    const snoutBridge = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.11, 0.38), furShade);
-    snoutBridge.position.set(0, 0.06, 0.42);
+    const snoutBridge = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.1, 0.4), fur);
+    snoutBridge.position.set(0, 0.07, 0.44);
     head.add(snoutBridge);
 
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.095, 14, 14), noseMat);
-    nose.position.set(0, 0.0, 0.72);
-    nose.scale.set(1.2, 0.88, 0.95);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.09, 14, 14), noseMat);
+    nose.position.set(0, 0.0, 0.76);
+    nose.scale.set(1.25, 0.85, 0.95);
     head.add(nose);
 
-    // Mouth line (subtle)
-    const mouth = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 0.03, 0.08),
-      furShade
-    );
-    mouth.position.set(0, -0.1, 0.62);
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.028, 0.07), furShade);
+    mouth.position.set(0, -0.1, 0.65);
     head.add(mouth);
+
+    // Jaw hint
+    const jaw = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 12), furBright);
+    jaw.position.set(0, -0.12, 0.35);
+    jaw.scale.set(0.95, 0.55, 1.1);
+    head.add(jaw);
 
     function makeEar(side) {
       const eg = new THREE.Group();
-      // Tall pointed GSD ears — flatter triangle silhouette
-      const outer = new THREE.Mesh(
-        new THREE.ConeGeometry(0.125, 0.72, 7),
-        furBright
-      );
-      outer.position.set(side * 0.2, 0.58, -0.02);
-      outer.rotation.z = side * 0.08;
-      outer.rotation.x = -0.05;
-      outer.scale.set(0.85, 1, 0.55);
+      const outer = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.78, 7), furBright);
+      outer.position.set(side * 0.18, 0.62, -0.02);
+      outer.rotation.z = side * 0.1;
+      outer.rotation.x = -0.08;
+      outer.scale.set(0.72, 1, 0.42);
       outer.castShadow = true;
       eg.add(outer);
-      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.2, 6), furShade);
-      tip.position.set(side * 0.2, 0.88, -0.04);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.22, 6), furBright);
+      tip.position.set(side * 0.18, 0.95, -0.04);
       tip.rotation.copy(outer.rotation);
       tip.scale.copy(outer.scale);
       eg.add(tip);
-      const inner = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.45, 6), pinkEar);
-      inner.position.set(side * 0.2, 0.52, 0.04);
+      const inner = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.48, 6), pinkEar);
+      inner.position.set(side * 0.18, 0.55, 0.045);
       inner.rotation.copy(outer.rotation);
-      inner.scale.set(0.75, 1, 0.45);
+      inner.scale.set(0.65, 1, 0.38);
       eg.add(inner);
-      // Base tuft for clearer ear attach
-      const base = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 10), fur);
-      base.position.set(side * 0.17, 0.28, 0.0);
-      base.scale.set(1.1, 0.7, 0.9);
+      const base = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), fur);
+      base.position.set(side * 0.16, 0.28, 0.0);
+      base.scale.set(1.05, 0.65, 0.85);
       eg.add(base);
       return eg;
     }
@@ -700,28 +919,27 @@
     head.add(earR);
     g.userData.ears = [earL, earR];
 
-    // Cyan eyes — small glow only (silhouette stays readable)
     function makeEye(side) {
       const eg = new THREE.Group();
-      const socket = new THREE.Mesh(new THREE.SphereGeometry(0.085, 14, 14), furShade);
-      socket.scale.set(1.05, 1.0, 0.8);
+      const socket = new THREE.Mesh(new THREE.SphereGeometry(0.078, 12, 12), fur);
+      socket.scale.set(1.0, 0.95, 0.75);
       eg.add(socket);
-      const ir = new THREE.Mesh(new THREE.SphereGeometry(0.058, 16, 16), iris);
-      ir.position.set(0, 0.01, 0.048);
+      const ir = new THREE.Mesh(new THREE.SphereGeometry(0.052, 16, 16), iris);
+      ir.position.set(0, 0.01, 0.045);
       eg.add(ir);
-      const pup = new THREE.Mesh(new THREE.SphereGeometry(0.026, 12, 12), pupil);
-      pup.position.set(0, 0.012, 0.08);
+      const pup = new THREE.Mesh(new THREE.SphereGeometry(0.024, 12, 12), pupil);
+      pup.position.set(0, 0.012, 0.075);
       eg.add(pup);
       const glint = new THREE.Mesh(
-        new THREE.SphereGeometry(0.012, 8, 8),
+        new THREE.SphereGeometry(0.011, 8, 8),
         new THREE.MeshBasicMaterial({ color: 0xffffff })
       );
-      glint.position.set(side * 0.016, 0.028, 0.09);
+      glint.position.set(side * 0.014, 0.026, 0.085);
       eg.add(glint);
-      // Tiny rim glow only (no second giant halo)
-      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 10), energySoft);
+      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 10), energySoft.clone());
+      glow.material.opacity = 0.1;
       eg.add(glow);
-      eg.position.set(side * 0.155, 0.09, 0.28);
+      eg.position.set(side * 0.145, 0.1, 0.3);
       eg.userData.iris = ir;
       eg.userData.glow = glow;
       return eg;
@@ -732,74 +950,96 @@
     head.add(eyeR);
     g.userData.eyes = [eyeL, eyeR];
 
-    // Legs — longer athletic stance
+    // ---- LEGS: longer, thigh/shin/ankle/paw ----
     const legData = [
-      { x: 0.24, z: 0.42, front: true },
-      { x: -0.24, z: 0.42, front: true },
-      { x: 0.22, z: -0.42, front: false },
-      { x: -0.22, z: -0.42, front: false },
+      { x: 0.26, z: 0.45, front: true },
+      { x: -0.26, z: 0.45, front: true },
+      { x: 0.24, z: -0.48, front: false },
+      { x: -0.24, z: -0.48, front: false },
     ];
     const legs = [];
-    legData.forEach((L) => {
+    const pawGlows = [];
+    legData.forEach(function (L) {
       const leg = new THREE.Group();
       const thigh = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.095, L.front ? 0.38 : 0.4, 8, 12),
+        new THREE.CapsuleGeometry(0.09, L.front ? 0.42 : 0.46, 8, 12),
         fur
       );
-      thigh.position.y = 0.55;
+      thigh.position.y = 0.62;
       thigh.castShadow = true;
       leg.add(thigh);
       const shin = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.07, 0.36, 8, 12),
+        new THREE.CapsuleGeometry(0.065, 0.4, 8, 12),
         furBright
       );
-      shin.position.y = 0.2;
+      shin.position.y = 0.24;
       leg.add(shin);
+      const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 10), furShade);
+      ankle.position.y = 0.08;
+      leg.add(ankle);
       const paw = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 12), padMat);
-      paw.position.set(0, 0.04, 0.03);
-      paw.scale.set(1.2, 0.5, 1.45);
+      paw.position.set(0, 0.03, 0.04);
+      paw.scale.set(1.25, 0.48, 1.5);
       leg.add(paw);
-      // Tiny paw spark (idle nearly invisible)
-      const pawGlow = new THREE.Mesh(
-        new THREE.SphereGeometry(0.1, 8, 8),
-        energySoft
-      );
-      pawGlow.position.set(0, 0.05, 0.03);
-      pawGlow.material = energySoft.clone();
-      pawGlow.material.opacity = 0.08;
+      // toe pads
+      for (let t = 0; t < 3; t++) {
+        const toe = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), padMat);
+        toe.position.set((t - 1) * 0.05, 0.02, 0.1);
+        toe.scale.set(1, 0.5, 1.1);
+        leg.add(toe);
+      }
+      const pawGlow = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 8), energySoft.clone());
+      pawGlow.material.opacity = 0.05;
+      pawGlow.position.set(0, 0.04, 0.04);
       leg.add(pawGlow);
+      pawGlows.push(pawGlow);
       leg.position.set(L.x, 0, L.z);
+      leg.userData.front = L.front;
       g.add(leg);
       legs.push(leg);
     });
     g.userData.legs = legs;
+    g.userData.pawGlows = pawGlows;
 
-    // Bushy raised tail (key art)
+    // ---- TAIL: smooth uniform plume (no ring/bead fluff spheres) ----
     const tail = new THREE.Group();
-    tail.position.set(0, 1.15, -0.78);
+    tail.position.set(0, 1.28, -0.82);
     const tSegs = [];
     let tParent = tail;
-    const tLens = [0.24, 0.22, 0.2, 0.18, 0.14];
-    tLens.forEach((len, i) => {
+    // Long overlapping tapered capsules — continuous fur volume
+    const segs = [
+      { len: 0.4, r: 0.115 },
+      { len: 0.36, r: 0.095 },
+      { len: 0.32, r: 0.075 },
+      { len: 0.26, r: 0.055 },
+    ];
+    segs.forEach(function (s, i) {
       const seg = new THREE.Group();
+      // Slight vertical squash for a soft plume silhouette (not sausage rings)
       const mesh = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.1 - i * 0.012, len, 8, 10),
-        i < 2 ? fur : furBright
-      );
-      mesh.position.y = len * 0.5;
-      mesh.castShadow = true;
-      seg.add(mesh);
-      const fluff = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12 - i * 0.012, 10, 10),
+        new THREE.CapsuleGeometry(s.r, s.len, 8, 14),
         furBright
       );
-      fluff.position.y = len * 0.55;
-      fluff.scale.set(1.55, 1.05, 1.4);
-      seg.add(fluff);
-      if (i === 0) seg.rotation.x = -1.05;
-      else {
-        seg.position.y = tLens[i - 1] * 0.92;
-        seg.rotation.x = -0.22;
+      mesh.position.y = s.len * 0.5;
+      mesh.scale.set(1.05, 1, 1.15);
+      mesh.castShadow = true;
+      seg.add(mesh);
+      // Single soft tip only at the end — not per-segment balls
+      if (i === segs.length - 1) {
+        const tip = new THREE.Mesh(
+          new THREE.SphereGeometry(s.r * 1.05, 12, 12),
+          furBright
+        );
+        tip.position.y = s.len * 0.92;
+        tip.scale.set(1.15, 0.95, 1.15);
+        seg.add(tip);
+      }
+      if (i === 0) {
+        seg.rotation.x = -1.08;
+      } else {
+        // Heavy overlap hides joints
+        seg.position.y = segs[i - 1].len * 0.78;
+        seg.rotation.x = -0.1;
       }
       tParent.add(seg);
       tParent = seg;
@@ -809,35 +1049,50 @@
     g.userData.tail = tail;
     g.userData.tailSegs = tSegs;
 
-    // Small lightning core on chest (accent, not a second sun)
+    // Lightning core on chest — cyan heart of the hound
     const core = new THREE.Group();
-    core.position.set(0, 1.08, 0.62);
-    const coreGem = new THREE.Mesh(new THREE.OctahedronGeometry(0.09, 0), energyHot);
+    core.position.set(0, 1.12, 0.68);
+    const coreGem = new THREE.Mesh(new THREE.OctahedronGeometry(0.1, 0), energyHot);
     core.add(coreGem);
-    const coreGlow = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 12), energySoft);
+    const coreRing = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.02, 6, 24), energy);
+    coreRing.rotation.x = Math.PI / 2;
+    core.add(coreRing);
+    const coreRing2 = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.012, 6, 24), energyPurple);
+    coreRing2.rotation.x = Math.PI / 2;
+    coreRing2.rotation.z = 0.4;
+    core.add(coreRing2);
+    const coreGlow = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 12), energySoft.clone());
+    coreGlow.material.opacity = 0.2;
     core.add(coreGlow);
     g.add(core);
     g.userData.core = core;
 
-    // Thin energy collar
-    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.024, 8, 32), energy);
+    // Energy collar — dual cyan/purple
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.03, 8, 40), energy);
     collar.rotation.x = Math.PI / 2;
-    collar.position.set(0, 1.2, 0.55);
+    collar.position.set(0, 1.28, 0.58);
     g.add(collar);
     g.userData.collar = collar;
+    const collarOuter = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.016, 6, 36), energyPurple);
+    collarOuter.rotation.x = Math.PI / 2;
+    collarOuter.position.set(0, 1.28, 0.58);
+    g.add(collarOuter);
+    g.userData.collarOuter = collarOuter;
 
-    // NO full-body aura shell (that made the white blob)
     g.userData.auraBody = null;
+    // Store fur mats so sprint can drive emissive energy-in-fur
+    g.userData.furMats = [fur, furBright, furShade, furSaddle].filter(Boolean);
+    g.userData.energyMats = [energy, energyHot, energyPurple];
 
-    // Sparse lightning sparks — only visible when sprinting (animated opacity)
-    const auraCount = 22;
+    // Orbiting lightning motes (cyan + purple mix)
+    const auraCount = 48;
     const auraPos = new Float32Array(auraCount * 3);
     for (let i = 0; i < auraCount; i++) {
       const a = (i / auraCount) * Math.PI * 2;
-      const r = 0.65 + Math.random() * 0.35;
-      auraPos[i * 3] = Math.cos(a) * r * 0.85;
-      auraPos[i * 3 + 1] = 0.55 + Math.random() * 1.0;
-      auraPos[i * 3 + 2] = Math.sin(a) * r * 0.75;
+      const r = 0.5 + Math.random() * 0.55;
+      auraPos[i * 3] = Math.cos(a) * r * 0.95;
+      auraPos[i * 3 + 1] = 0.45 + Math.random() * 1.25;
+      auraPos[i * 3 + 2] = Math.sin(a) * r * 0.8;
     }
     const auraGeo = new THREE.BufferGeometry();
     auraGeo.setAttribute("position", new THREE.BufferAttribute(auraPos, 3));
@@ -848,7 +1103,7 @@
         color: 0x67e8f9,
         size: 0.16,
         transparent: true,
-        opacity: 0.2,
+        opacity: 0.1,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         sizeAttenuation: true,
@@ -857,37 +1112,69 @@
     g.add(auraPts);
     g.userData.auraPts = auraPts;
     g.userData.auraBase = auraPos.slice(0);
-
+    // Second purple mote cloud
+    const auraPos2 = new Float32Array(auraCount * 3);
+    for (let i = 0; i < auraCount; i++) {
+      const a = (i / auraCount) * Math.PI * 2 + 0.4;
+      const r = 0.6 + Math.random() * 0.5;
+      auraPos2[i * 3] = Math.cos(a) * r * 0.85;
+      auraPos2[i * 3 + 1] = 0.4 + Math.random() * 1.2;
+      auraPos2[i * 3 + 2] = Math.sin(a) * r * 0.7;
+    }
+    const auraGeo2 = new THREE.BufferGeometry();
+    auraGeo2.setAttribute("position", new THREE.BufferAttribute(auraPos2, 3));
+    const auraPts2 = new THREE.Points(
+      auraGeo2,
+      new THREE.PointsMaterial({
+        map: softMap,
+        color: 0xc084fc,
+        size: 0.14,
+        transparent: true,
+        opacity: 0.06,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        sizeAttenuation: true,
+      })
+    );
+    g.add(auraPts2);
+    g.userData.auraPtsPurple = auraPts2;
+    g.userData.auraBasePurple = auraPos2.slice(0);
     g.userData.wings = null;
 
+    // Contact shadow
     const shadow = new THREE.Mesh(
-      new THREE.CircleGeometry(1.05, 32),
+      new THREE.CircleGeometry(1.0, 32),
       new THREE.MeshBasicMaterial({
         color: 0x000000,
         transparent: true,
-        opacity: 0.38,
+        opacity: 0.42,
         depthWrite: false,
       })
     );
     shadow.rotation.x = -Math.PI / 2;
-    shadow.position.y = 0.015;
+    shadow.position.y = 0.012;
     g.add(shadow);
+    g.userData.shadow = shadow;
 
     const underGlow = new THREE.Mesh(
-      new THREE.CircleGeometry(1.05, 32),
+      new THREE.CircleGeometry(0.95, 32),
       new THREE.MeshBasicMaterial({
         color: 0x67e8f9,
         transparent: true,
-        opacity: 0.06,
+        opacity: 0.04,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
       })
     );
     underGlow.rotation.x = -Math.PI / 2;
-    underGlow.position.y = 0.03;
+    underGlow.position.y = 0.028;
     g.add(underGlow);
     g.userData.underGlow = underGlow;
+
+    // No full-body rim sphere (caused a cyan "bubble" against the sky).
+    // Separation comes from rim/key lights only.
+    g.userData.rim = null;
 
     return g;
   }
@@ -896,13 +1183,21 @@
   player.add(boltMesh);
   scene.add(player);
 
-  // Modest cyan accents — do not wash white fur
-  const boltLight = new THREE.PointLight(0x22d3ee, 0.9, 14);
-  boltLight.position.set(0, 1.4, 0.6);
+  // Hero lights: cyan core + purple resonance + soft white key for white fur
+  const boltLight = new THREE.PointLight(0x22d3ee, 0.65, 14);
+  boltLight.position.set(0, 1.45, 0.7);
   boltMesh.add(boltLight);
-  const boltLight2 = new THREE.PointLight(0x67e8f9, 0.4, 10);
-  boltLight2.position.set(0, 1.5, 0.2);
+  const boltLight2 = new THREE.PointLight(0x67e8f9, 0.32, 10);
+  boltLight2.position.set(0, 1.55, -0.35);
   boltMesh.add(boltLight2);
+  // Purple resonance fill — off at rest so white fur stays pure white
+  const boltLightPurple = new THREE.PointLight(0xa855f7, 0.0, 11);
+  boltLightPurple.position.set(-0.35, 1.5, 0.2);
+  boltMesh.add(boltLightPurple);
+  // Warm key from above-front so white fur form reads
+  const boltKey = new THREE.PointLight(0xfff8f0, 0.55, 12);
+  boltKey.position.set(0.4, 2.1, 0.9);
+  boltMesh.add(boltKey);
 
   // Lightning Core particle trail — ribbon + sparks + arcs + echoes
   // "The thunder that follows the lightning hound."
@@ -919,9 +1214,9 @@
         })
       : null;
 
-  // Soft energy ring aura (sprint)
+  // Dual energy ring aura — cyan + purple (sprint / resonance)
   const aura = new THREE.Mesh(
-    new THREE.TorusGeometry(1.25, 0.07, 8, 48),
+    new THREE.TorusGeometry(1.35, 0.08, 8, 56),
     new THREE.MeshBasicMaterial({
       color: 0x22d3ee,
       transparent: true,
@@ -933,8 +1228,21 @@
   aura.rotation.x = Math.PI / 2;
   aura.position.y = 0.95;
   player.add(aura);
+  const auraPurple = new THREE.Mesh(
+    new THREE.TorusGeometry(1.55, 0.05, 6, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0xa855f7,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  auraPurple.rotation.x = Math.PI / 2;
+  auraPurple.position.y = 1.0;
+  player.add(auraPurple);
   const auraDisc = new THREE.Mesh(
-    new THREE.CircleGeometry(1.15, 36),
+    new THREE.CircleGeometry(1.25, 40),
     new THREE.MeshBasicMaterial({
       color: 0x67e8f9,
       transparent: true,
@@ -1272,7 +1580,14 @@
       ["Best Core charge", Math.round(progress.bestStarCore || 0) + "%"],
       ["Decrees found", (progress.decrees.length || 0) + " / " + totalDecreeCount()],
       ["Quests (lifetime)", (progress.completedQuests || []).length + " / " + QUEST_DEFS.length],
-      ["Biomes known", biomes + " / 3"],
+      [
+        "Biomes known",
+        biomes +
+          " / " +
+          (window.BoltProcedural && window.BoltProcedural.BIOME_COUNT
+            ? window.BoltProcedural.BIOME_COUNT
+            : 7),
+      ],
       ["Pack events", String(s.events || 0)],
       ["Howls", String(s.howls || 0)],
       ["Ruins looted", String(s.ruins || 0)],
@@ -1976,6 +2291,16 @@
       toast(ev.lore, 4000, "lore");
     }, 1000);
 
+    // Sky meteor shower for pack events (starfall = dense streak burst)
+    if (reactiveSky && reactiveSky.spawnComet) {
+      const shower = ev.id === "starfall" ? 8 : ev.id === "fluxStorm" ? 5 : 3;
+      reactiveSky.spawnComet({
+        count: shower,
+        kind: ev.id === "starfall" ? "meteor" : "comet",
+        burst: ev.id === "starfall" ? 2.2 : 1.1,
+      });
+    }
+
     // Visual burst light
     const col =
       ev.id === "fluxStorm" ? 0xf97316 : ev.id === "starfall" ? 0xa5b4fc : 0xa855f7;
@@ -2175,18 +2500,28 @@
   }
 
   function groundHeightAt(x, z) {
-    // Infinite open-world surface
+    // Infinite open-world surface + climbable structure tops
+    const py = player && player.position ? player.position.y : 0;
     let best = openWorld.heightAt(x, z);
+    // Static pads / citadel / starter platforms — only if player can reach the top
     for (let i = 0; i < colliders.length; i++) {
       const c = colliders[i];
       if (x >= c.minx && x <= c.maxx && z >= c.minz && z <= c.maxz) {
-        if (c.y >= best) best = c.y;
+        // Must be near the pad height (step up / drop onto) — never snap from deep below
+        if (c.y > best && py + 2.8 >= c.y && py - 5.5 <= c.y + 0.5) {
+          best = c.y;
+        }
       }
+    }
+    // Procedural ruins / terrain walk tops (temples, platforms, boulder fields…)
+    if (spawner && spawner.sampleWalkTop) {
+      const top = spawner.sampleWalkTop(x, z, py);
+      if (top != null && top > best) best = top;
     }
     // Orbital debris platforms (land-on wreckage)
     if (orbitalDebris && orbitalDebris.platformHeightAt) {
       const dy = orbitalDebris.platformHeightAt(x, player.position.y, z);
-      if (dy != null && dy > best) best = dy;
+      if (dy != null && dy > best && py + 3 >= dy && py - 6 <= dy + 0.5) best = dy;
     }
     return best;
   }
@@ -2247,6 +2582,9 @@
       if (meaningfulMeterEl) meaningfulMeterEl.classList.add("gate-open");
       showGateBanner("MEANINGFUL GATE OPEN — SPIRAL-47 ANSWERS YOUR SPRINT");
       toast("THE COSMOS UNLOCKS — paths · flora · ruins · detail stream free", 4200, "gate-open-toast");
+      if (reactiveSky && reactiveSky.spawnComet) {
+        reactiveSky.spawnComet({ count: 4, kind: "comet", burst: 1.4 });
+      }
       setTimeout(function () {
         toast("Lore: Intention is the key. Momentum is the seal. Sprint is the force.", 3800, "lore");
       }, 1600);
@@ -2497,6 +2835,9 @@
     burstConfetti(player.position, 0xa855f7);
     flashHudMeter(resonanceMeterEl);
     toast("RESONANCE HOWL — Flux answers the Pack", 2400);
+    if (reactiveSky && reactiveSky.spawnComet) {
+      reactiveSky.spawnComet({ count: 3, kind: "comet", burst: 1.0 });
+    }
     setTimeout(function () {
       toast("Lore: Howl is not noise — it is a Resonance Decree spoken aloud.", 3200, "lore");
     }, 900);
@@ -2981,6 +3322,21 @@
       player.position.z += state.vel.z * dt;
     }
 
+    // Solid structure walls (ruins / rocks / landmarks) — horizontal impact
+    if (!planetMotion && spawner && spawner.resolveWallCollision) {
+      const wallHit = spawner.resolveWallCollision(player.position, 0.9, state.vel);
+      if (wallHit && wallHit.impact > 10) {
+        if (!updatePlayer._wallToastT || updatePlayer._wallToastT <= 0) {
+          toast("IMPACT — " + String(wallHit.type || "STRUCTURE").toUpperCase() + " ⚡", 1100);
+          updatePlayer._wallToastT = 1.4;
+          punchCam(0.12 + Math.min(0.2, wallHit.impact * 0.01), 3);
+        }
+      }
+    }
+    if (updatePlayer._wallToastT > 0) {
+      updatePlayer._wallToastT -= dt;
+    }
+
     // Horizontal speed (needed early for debris / assists — do not use before this line)
     const speedNow = Math.hypot(state.vel.x, state.vel.z);
 
@@ -3056,7 +3412,11 @@
     }
 
     // Stream infinite chunks under Bolt
-    openWorld.ensureAround(player.position.x, player.position.z);
+    openWorld.ensureAround(player.position.x, player.position.z, {
+      vx: state.vel.x,
+      vz: state.vel.z,
+      lookYaw: yaw,
+    });
 
     // Biome atmosphere (fog / lights) — sky dome keeps nebula art
     biomeAtmo.update(
@@ -3067,16 +3427,19 @@
       scene,
       { ambient: ambient, sun: sun, rim: rim, fill: lights.fill }
     );
-    // Don't fully override sky dome with flat color — only fog/lights
-    // Keep background dark so dome shows
-    scene.background = biomeAtmo.sky.clone().multiplyScalar(0.35);
+    // Dim biome zenith as clear color (matches dome; not fixed cool-blue void)
+    if (scene.background && scene.background.isColor) {
+      scene.background.copy(biomeAtmo.sky).multiplyScalar(0.35);
+    } else {
+      scene.background = biomeAtmo.sky.clone().multiplyScalar(0.35);
+    }
 
     // Soft particles follow Bolt + biome tint
     softParticles.follow(player.position.x, player.position.z);
     softParticles.setColor(biomeAtmo.rim);
 
-    // Sky dome follows camera so it never ends
-    if (skyDome) {
+    // Reactive sky follows camera (dome + nebulae + gate/lightning)
+    if (skyDome && !reactiveSky) {
       skyDome.position.copy(camera.position);
     }
     // Horizon atmospheric haze
@@ -3091,12 +3454,23 @@
     const gh = groundHeightAt(player.position.x, player.position.z);
     // Don't snap to flat ground while mid planet-land cinematic
     if (!state.planetLand) {
-      if (player.position.y <= gh && state.vel.y <= 0) {
+      const wasAir = !state.onGround;
+      const fallSpeed = -state.vel.y;
+      if (player.position.y <= gh + 0.08 && state.vel.y <= 0.15) {
+        // Landed on ground or climbable platform / ruin top
+        const impactY = fallSpeed;
         player.position.y = gh;
         state.vel.y = 0;
-        if (!state.onGround && state.ascentCommit && !state.currentPlanet) {
+        if (wasAir && impactY > 9) {
+          punchCam(0.1 + Math.min(0.25, impactY * 0.012), 2);
+          if (impactY > 16 && (!updatePlayer._landToastT || updatePlayer._landToastT <= 0)) {
+            toast("LANDING IMPACT ⚡", 900);
+            updatePlayer._landToastT = 1.2;
+          }
+        }
+        if (wasAir && state.ascentCommit && !state.currentPlanet) {
           toast("SURFACE RETURN — paw scale · sprint+jump again to ascend", 2400, "lore");
-        } else if (!state.onGround && state.ascentCommit && state.currentPlanet) {
+        } else if (wasAir && state.ascentCommit && state.currentPlanet) {
           toast(
             "TOUCHDOWN — " + (state.currentPlanet.short || state.currentPlanet.name),
             2200,
@@ -3113,6 +3487,7 @@
       } else {
         state.onGround = false;
       }
+      if (updatePlayer._landToastT > 0) updatePlayer._landToastT -= dt;
     }
     // NO radius walls — open world
 
@@ -3136,142 +3511,311 @@
     const turnSpeed = state.sprinting ? 16 : moveSpeed > 2 ? 12 : 9;
     boltMesh.rotation.y = dampAngle(boltMesh.rotation.y, targetYaw, turnSpeed, dt);
 
-    // Procedural life: bob, head, ears, legs, tail, core pulse
+    // Procedural life: gallop, head, ears, tail, core, rim (Bolt polish 4–7)
     const tAnim = performance.now() * 0.001;
     const run = moveSpeed > 3;
-    const sprintMul = state.sprinting ? 1.85 : 1;
+    const sprintMul = state.sprinting ? 1.9 : 1;
+    const gaitSpeed = (run ? 14 : 3.5) * sprintMul;
     const bob = state.onGround
-      ? Math.sin(tAnim * (run ? 13 * sprintMul : 3.2)) * (run ? 0.07 : 0.028)
+      ? Math.sin(tAnim * gaitSpeed) * (run ? 0.085 : 0.03)
       : Math.sin(tAnim * 4) * 0.02;
     boltMesh.position.y = bob;
-    // Slight nose-down lean when sprinting forward
     boltMesh.rotation.x = damp(
       boltMesh.rotation.x,
-      run ? -0.06 - (state.sprinting ? 0.08 : 0) : 0,
+      run ? -0.08 - (state.sprinting ? 0.1 : 0) : 0,
       6,
       dt
     );
-    // Bank into turns
     let yawDiff = targetYaw - boltMesh.rotation.y;
     while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
     while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-    boltMesh.rotation.z = damp(boltMesh.rotation.z, THREE.MathUtils.clamp(-yawDiff * 0.45, -0.35, 0.35), 8, dt);
+    boltMesh.rotation.z = damp(
+      boltMesh.rotation.z,
+      THREE.MathUtils.clamp(-yawDiff * 0.5, -0.4, 0.4),
+      8,
+      dt
+    );
 
     if (boltMesh.userData.head) {
-      const headPitch = state.howlT > 0 ? -0.45 : run ? -0.05 : Math.sin(tAnim * 1.5) * 0.04;
-      boltMesh.userData.head.rotation.x = damp(boltMesh.userData.head.rotation.x, headPitch, 8, dt);
-      // Head leads into turn slightly
+      const headPitch =
+        state.howlT > 0 ? -0.5 : run ? -0.06 : Math.sin(tAnim * 1.5) * 0.04;
+      boltMesh.userData.head.rotation.x = damp(
+        boltMesh.userData.head.rotation.x,
+        headPitch,
+        8,
+        dt
+      );
       boltMesh.userData.head.rotation.y = damp(
         boltMesh.userData.head.rotation.y,
-        THREE.MathUtils.clamp(yawDiff * 0.35, -0.4, 0.4),
+        THREE.MathUtils.clamp(yawDiff * 0.4, -0.45, 0.45),
         7,
         dt
       );
       boltMesh.userData.head.rotation.z = Math.sin(tAnim * 2.2) * 0.02;
     }
     if (boltMesh.userData.ears) {
-      boltMesh.userData.ears.forEach((ear, i) => {
-        ear.rotation.z = Math.sin(tAnim * 6 + i) * 0.06 + (state.howlT > 0 ? -0.1 : 0);
+      boltMesh.userData.ears.forEach(function (ear, i) {
+        const twitch =
+          state.howlT > 0
+            ? -0.18 + Math.sin(tAnim * 22 + i) * 0.08
+            : Math.sin(tAnim * 5.5 + i * 1.7) * 0.07;
+        ear.rotation.z = damp(ear.rotation.z, twitch, 10, dt);
+        ear.rotation.x = state.howlT > 0 ? -0.12 : Math.sin(tAnim * 3 + i) * 0.03;
       });
     }
     const stageGlow = coreStageFromCharge(state.starCore).boltGlow || 1;
     if (boltMesh.userData.core) {
       const pulse =
-        (1 + Math.sin(tAnim * 5) * 0.1 + (state.sprinting ? 0.15 : 0)) *
+        (1 + Math.sin(tAnim * 5.5) * 0.12 + (state.sprinting ? 0.18 : 0)) *
         (0.95 + stageGlow * 0.08);
       boltMesh.userData.core.scale.setScalar(pulse);
-      boltMesh.userData.core.rotation.y += dt * (state.sprinting ? 2.5 : 1.0) * stageGlow;
+      boltMesh.userData.core.rotation.y += dt * (state.sprinting ? 3.2 : 1.1) * stageGlow;
       boltMesh.userData.core.traverse(function (c) {
         if (c.material && c.material.emissiveIntensity != null) {
           if (c.material.userData._baseEm == null) {
             c.material.userData._baseEm = c.material.emissiveIntensity;
           }
           c.material.emissiveIntensity =
-            c.material.userData._baseEm * (0.85 + stageGlow * 0.15) +
-            (state.sprinting ? 0.25 : 0);
+            c.material.userData._baseEm * (0.85 + stageGlow * 0.2) +
+            (state.sprinting ? 0.35 : 0) +
+            state.resonance * 0.15;
         }
       });
     }
     if (boltMesh.userData.collar) {
-      boltMesh.userData.collar.rotation.z += dt * (0.9 + stageGlow * 0.4);
-      boltMesh.userData.collar.scale.setScalar(
-        0.98 + (state.sprinting ? 0.04 : 0)
-      );
+      boltMesh.userData.collar.rotation.z += dt * (1.0 + stageGlow * 0.5);
+      boltMesh.userData.collar.scale.setScalar(0.97 + (state.sprinting ? 0.06 : 0) + state.momentum * 0.04);
       if (boltMesh.userData.collar.material && boltMesh.userData.collar.material.emissiveIntensity != null) {
         boltMesh.userData.collar.material.emissiveIntensity =
-          1.1 + (state.sprinting ? 0.4 : 0) + state.resonance * 0.25;
+          1.0 + (state.sprinting ? 0.45 : 0) + state.resonance * 0.3;
       }
     }
     if (boltMesh.userData.tail) {
-      boltMesh.userData.tail.rotation.y = Math.sin(tAnim * (run ? 11 : 3.5)) * (run ? 0.45 : 0.25);
-      boltMesh.userData.tail.rotation.z = 0.15 + Math.sin(tAnim * 2.8) * 0.12;
+      // Root sway only — keep plume continuous (no big per-joint opens)
+      boltMesh.userData.tail.rotation.y =
+        Math.sin(tAnim * (run ? 10 : 2.8)) * (run ? 0.38 : 0.16);
+      boltMesh.userData.tail.rotation.z =
+        0.12 + Math.sin(tAnim * 2.6) * 0.1 + (state.sprinting ? 0.06 : 0);
+      boltMesh.userData.tail.rotation.x = run ? -0.08 : 0;
     }
     if (boltMesh.userData.tailSegs) {
-      boltMesh.userData.tailSegs.forEach((seg, i) => {
-        seg.rotation.y = Math.sin(tAnim * (run ? 12 : 4) + i * 0.7) * 0.15;
+      boltMesh.userData.tailSegs.forEach(function (seg, i) {
+        // Subtle wave down the chain; base pose stays overlapping
+        const baseX = i === 0 ? -1.08 : -0.1;
+        seg.rotation.y = Math.sin(tAnim * (run ? 11 : 3.2) + i * 0.55) * (0.06 + i * 0.02);
+        seg.rotation.x = baseX + Math.sin(tAnim * (run ? 9 : 2.5) + i * 0.4) * 0.04;
       });
     }
+    // Diagonal gallop: FL+HR together, FR+HL together
     if (boltMesh.userData.legs && run && state.onGround) {
-      boltMesh.userData.legs.forEach((leg, i) => {
-        const phase = tAnim * 15 * sprintMul + i * Math.PI * 0.5;
-        leg.rotation.x = Math.sin(phase) * (state.sprinting ? 0.7 : 0.55);
+      const amp = state.sprinting ? 0.85 : 0.58;
+      boltMesh.userData.legs.forEach(function (leg, i) {
+        // 0 FR, 1 FL, 2 BR, 3 BL  — pair 0+3 and 1+2
+        const pair = i === 0 || i === 3 ? 0 : 1;
+        const phase = tAnim * gaitSpeed + pair * Math.PI;
+        leg.rotation.x = Math.sin(phase) * amp;
+        leg.position.y = Math.max(0, Math.sin(phase) * 0.04);
       });
     } else if (boltMesh.userData.legs) {
-      boltMesh.userData.legs.forEach((leg) => {
-        leg.rotation.x = damp(leg.rotation.x, 0, 8, dt);
+      boltMesh.userData.legs.forEach(function (leg) {
+        leg.rotation.x = damp(leg.rotation.x, 0, 9, dt);
+        leg.position.y = damp(leg.position.y, 0, 9, dt);
+      });
+    }
+    // ---- Bolt energy power — lightning on white fur only when truly charged ----
+    // Pure white at rest/idle · energy only from meaningful sprint / hard sprint / howl
+    const boltPower = THREE.MathUtils.clamp(
+      (state.meaningfulScore || 0) * 0.55 +
+        (state.sprinting ? 0.22 : 0) +
+        Math.min(0.12, moveSpeed / 70) +
+        (state.momentum || 0) * 0.08 +
+        (state.howlT > 0 ? 0.25 : 0) +
+        (state.resonance || 0) * 0.06,
+      0,
+      1.15
+    );
+    // Higher threshold so casual momentum never dyes him pink/grey
+    const boltPowerS = THREE.MathUtils.smoothstep(boltPower, 0.28, 1.05);
+
+    // Stay PURE WHITE unless energy is actually on — never paint the coat grey/pink at rest
+    if (boltMesh.userData.furMats) {
+      boltMesh.userData.furMats.forEach(function (mat, mi) {
+        if (!mat || mat.emissiveIntensity == null) return;
+        if (mat.userData._baseFurEm == null) {
+          mat.userData._baseFurEm = mat.emissiveIntensity;
+        }
+        const base = mat.userData._baseFurEm;
+        // Always keep albedo pure white
+        mat.color.setHex(0xffffff);
+        if (boltPowerS < 0.08) {
+          mat.emissive.setHex(0xffffff);
+          mat.emissiveIntensity = base;
+        } else {
+          // Soft cyan energy wash only on high charge (not a full recolor)
+          const cyan = new THREE.Color(0xffffff);
+          cyan.lerp(new THREE.Color(0xcff9ff), Math.min(0.45, boltPowerS * 0.55));
+          if (boltPowerS > 0.7 && state.resonance > 0.55) {
+            cyan.lerp(new THREE.Color(0xe9d5ff), (boltPowerS - 0.7) * 0.5);
+          }
+          mat.emissive.copy(cyan);
+          mat.emissiveIntensity = base + boltPowerS * 0.06 + (state.sprinting ? 0.03 : 0);
+        }
+      });
+    }
+
+    // Spine / shoulder lightning veins
+    if (boltMesh.userData.veinMats) {
+      const veinOp = Math.max(0, (boltPowerS - 0.2) * 0.85 + (state.sprinting ? 0.15 : 0));
+      boltMesh.userData.veinMats.forEach(function (vm, i) {
+        if (!vm) return;
+        vm.opacity = veinOp * (0.55 + 0.45 * Math.sin(tAnim * 8 + i * 1.2));
+        // Cyan→purple along the spine
+        if (i > 2) vm.color.setHex(0xc084fc);
+        else vm.color.setHex(0x67e8f9);
+      });
+    }
+    if (boltMesh.userData.shoulderBlaze) {
+      boltMesh.userData.shoulderBlaze.forEach(function (bl, i) {
+        if (!bl || !bl.material) return;
+        bl.material.opacity =
+          Math.max(0, (boltPowerS - 0.25) * 0.45) *
+          (0.7 + 0.3 * Math.sin(tAnim * 6 + i));
+        bl.scale.setScalar(0.9 + boltPowerS * 0.45 + Math.sin(tAnim * 5 + i) * 0.08);
+      });
+    }
+    if (boltMesh.userData.energyShell && boltMesh.userData.energyShell.material) {
+      boltMesh.userData.energyShell.material.opacity =
+        Math.max(0, (boltPowerS - 0.35) * 0.22) + (state.howlT > 0 ? 0.08 : 0);
+      // Tint shell purple at high resonance
+      if (state.resonance > 0.45 || boltPowerS > 0.7) {
+        boltMesh.userData.energyShell.material.color.setHex(0xc084fc);
+      } else {
+        boltMesh.userData.energyShell.material.color.setHex(0x67e8f9);
+      }
+    }
+    if (boltMesh.userData.collarOuter && boltMesh.userData.collarOuter.material) {
+      if (boltMesh.userData.collarOuter.material.emissiveIntensity != null) {
+        boltMesh.userData.collarOuter.material.emissiveIntensity =
+          0.8 + boltPowerS * 1.1 + state.resonance * 0.5;
+      }
+      boltMesh.userData.collarOuter.scale.setScalar(0.95 + boltPowerS * 0.12);
+    }
+
+    if (boltMesh.userData.pawGlows) {
+      boltMesh.userData.pawGlows.forEach(function (pg) {
+        if (pg.material) {
+          pg.material.opacity =
+            0.05 +
+            boltPowerS * 0.35 +
+            state.momentum * 0.1 +
+            (state.sprinting ? 0.2 : 0) +
+            (state.howlT > 0 ? 0.12 : 0);
+          // Paw lightning: cyan, purple at high power
+          pg.material.color.setHex(boltPowerS > 0.65 ? 0xc084fc : 0x67e8f9);
+        }
       });
     }
     if (boltMesh.userData.underGlow) {
-      // Soft ground light — stronger only when sprinting
       boltMesh.userData.underGlow.material.opacity =
-        0.05 + state.momentum * 0.1 + (state.sprinting ? 0.14 : 0);
+        0.04 + boltPowerS * 0.22 + state.momentum * 0.08 + (state.sprinting ? 0.12 : 0);
+      boltMesh.userData.underGlow.material.color.setHex(
+        boltPowerS > 0.6 ? 0xa855f7 : 0x67e8f9
+      );
+      // Stretch contact glow with speed
+      const stretch = 1 + Math.min(1.2, moveSpeed * 0.02);
+      boltMesh.userData.underGlow.scale.set(1 / stretch, 1, stretch);
     }
-    // Sparse aura sparks — mostly off at idle
+    if (boltMesh.userData.shadow) {
+      const stretch = 1 + Math.min(1.0, moveSpeed * 0.018);
+      boltMesh.userData.shadow.scale.set(1 / stretch, 1, stretch);
+      boltMesh.userData.shadow.material.opacity = 0.38 + (state.sprinting ? 0.08 : 0);
+    }
+    // Cyan mote cloud
     if (boltMesh.userData.auraPts && boltMesh.userData.auraBase) {
       const pos = boltMesh.userData.auraPts.geometry.attributes.position.array;
       const base = boltMesh.userData.auraBase;
       const n = base.length / 3;
+      const spin = state.sprinting ? 11 : 2.5 + boltPowerS * 4;
       for (let i = 0; i < n; i++) {
-        const ph = tAnim * (state.sprinting ? 8 : 3) + i * 0.7;
-        pos[i * 3] = base[i * 3] + Math.sin(ph) * 0.04;
-        pos[i * 3 + 1] = base[i * 3 + 1] + Math.cos(ph * 1.3) * 0.05;
-        pos[i * 3 + 2] = base[i * 3 + 2] + Math.sin(ph * 0.9) * 0.03;
+        const ph = tAnim * spin + i * 0.7;
+        const expand = 1 + boltPowerS * 0.35;
+        pos[i * 3] = base[i * 3] * expand + Math.sin(ph) * 0.06;
+        pos[i * 3 + 1] = base[i * 3 + 1] + Math.cos(ph * 1.3) * 0.07;
+        pos[i * 3 + 2] = base[i * 3 + 2] * expand + Math.sin(ph * 0.9) * 0.05;
       }
       boltMesh.userData.auraPts.geometry.attributes.position.needsUpdate = true;
       if (boltMesh.userData.auraPts.material) {
         boltMesh.userData.auraPts.material.opacity =
-          0.08 +
-          state.momentum * 0.12 +
-          (state.sprinting ? 0.28 : 0) +
-          (state.howlT > 0 ? 0.2 : 0);
+          0.04 + boltPowerS * 0.45 + (state.howlT > 0 ? 0.2 : 0);
         boltMesh.userData.auraPts.material.size =
-          0.12 + (state.sprinting ? 0.1 : 0) + state.momentum * 0.06;
+          0.12 + boltPowerS * 0.22 + (state.sprinting ? 0.08 : 0);
       }
     }
-    // Eye glow — restrained
+    // Purple mote cloud
+    if (boltMesh.userData.auraPtsPurple && boltMesh.userData.auraBasePurple) {
+      const pos2 = boltMesh.userData.auraPtsPurple.geometry.attributes.position.array;
+      const base2 = boltMesh.userData.auraBasePurple;
+      const n2 = base2.length / 3;
+      for (let i = 0; i < n2; i++) {
+        const ph = tAnim * (state.sprinting ? 8 : 2) + i * 0.9;
+        const expand = 1 + boltPowerS * 0.4;
+        pos2[i * 3] = base2[i * 3] * expand + Math.cos(ph) * 0.05;
+        pos2[i * 3 + 1] = base2[i * 3 + 1] + Math.sin(ph * 1.1) * 0.06;
+        pos2[i * 3 + 2] = base2[i * 3 + 2] * expand + Math.cos(ph * 0.8) * 0.04;
+      }
+      boltMesh.userData.auraPtsPurple.geometry.attributes.position.needsUpdate = true;
+      if (boltMesh.userData.auraPtsPurple.material) {
+        boltMesh.userData.auraPtsPurple.material.opacity =
+          Math.max(0, (boltPowerS - 0.25) * 0.4) + state.resonance * 0.15;
+        boltMesh.userData.auraPtsPurple.material.size = 0.1 + boltPowerS * 0.2;
+      }
+    }
     if (boltMesh.userData.eyes) {
       boltMesh.userData.eyes.forEach(function (eg) {
         if (eg.userData.iris && eg.userData.iris.material) {
           eg.userData.iris.material.emissiveIntensity =
-            1.6 + stageGlow * 0.35 + (state.sprinting ? 0.5 : 0) + state.resonance * 0.4;
+            1.25 +
+            stageGlow * 0.3 +
+            boltPowerS * 0.7 +
+            state.resonance * 0.4 +
+            (state.howlT > 0 ? 0.55 : 0);
+          // Cosmic eyes: more purple at high resonance
+          if (state.resonance > 0.55 || boltPowerS > 0.75) {
+            eg.userData.iris.material.emissive.setHex(0xa855f7);
+          } else {
+            eg.userData.iris.material.emissive.setHex(0x22d3ee);
+          }
         }
         if (eg.userData.glow && eg.userData.glow.material) {
           eg.userData.glow.material.opacity =
-            0.1 + (state.sprinting ? 0.12 : 0) + state.resonance * 0.08;
+            0.08 + boltPowerS * 0.2 + state.resonance * 0.1 + (state.sprinting ? 0.08 : 0);
         }
       });
     }
-    // Local hero lights — modest so fur isn't blown out
     if (boltLight) {
       const coreGlow = boltLight.userData.coreGlowMul != null ? boltLight.userData.coreGlowMul : 1;
       boltLight.intensity =
-        (0.85 + state.momentum * 0.7 + (state.howlT > 0 ? 0.8 : 0) + (state.sprinting ? 0.55 : 0)) *
+        (0.5 +
+          boltPowerS * 0.7 +
+          state.momentum * 0.3 +
+          (state.howlT > 0 ? 0.45 : 0) +
+          (state.sprinting ? 0.35 : 0)) *
         coreGlow;
       boltLight.color.setHex(0x22d3ee);
     }
     if (typeof boltLight2 !== "undefined" && boltLight2) {
-      boltLight2.intensity = 0.35 + state.momentum * 0.4 + (state.sprinting ? 0.35 : 0);
+      boltLight2.intensity = 0.25 + boltPowerS * 0.4 + state.momentum * 0.2 + (state.sprinting ? 0.25 : 0);
       boltLight2.color.setHex(0x67e8f9);
+    }
+    if (typeof boltLightPurple !== "undefined" && boltLightPurple) {
+      // Only light purple when energy is up — never wash white fur pink at idle
+      boltLightPurple.intensity =
+        boltPowerS * 0.65 +
+        Math.max(0, state.resonance - 0.4) * 0.35 +
+        (state.howlT > 0 ? 0.3 : 0);
+    }
+    if (typeof boltKey !== "undefined" && boltKey) {
+      boltKey.intensity = 0.48 + (state.sprinting ? 0.18 : 0) + boltPowerS * 0.1;
     }
 
     for (let i = 0; i < boostPads.length; i++) {
@@ -3547,19 +4091,33 @@
       });
     }
 
-    const aOp =
-      state.resonance * 0.4 +
-      (state.howlT > 0 ? 0.35 : 0) +
-      stageTrail * 0.08 +
-      (state.packEventT > 0 ? 0.2 : 0);
+    // Dual ring aura — cyan + purple, scales with Meaningful Sprint + resonance
+    const aPower = THREE.MathUtils.clamp(
+      (state.meaningfulScore || 0) * 0.55 +
+        (state.momentum || 0) * 0.25 +
+        (state.sprinting ? 0.2 : 0) +
+        state.resonance * 0.35 +
+        (state.howlT > 0 ? 0.3 : 0) +
+        stageTrail * 0.08 +
+        (state.packEventT > 0 ? 0.15 : 0),
+      0,
+      1.2
+    );
+    const aOp = aPower * 0.55;
     aura.material.opacity = aOp;
     aura.scale.setScalar(
-      1 + state.resonance * 0.5 + stageTrail * 0.15 + Math.sin(performance.now() * 0.008) * 0.08
+      1 + aPower * 0.55 + Math.sin(performance.now() * 0.008) * 0.08
     );
-    aura.rotation.z = performance.now() * 0.001;
+    aura.rotation.z = performance.now() * 0.0012;
+    if (typeof auraPurple !== "undefined" && auraPurple) {
+      auraPurple.material.opacity = Math.max(0, (aPower - 0.2) * 0.4) + state.resonance * 0.2;
+      auraPurple.scale.setScalar(1 + aPower * 0.7);
+      auraPurple.rotation.z = -performance.now() * 0.0009;
+    }
     if (auraDisc) {
-      auraDisc.material.opacity = aOp * 0.35;
-      auraDisc.scale.setScalar(1 + state.resonance * 0.4 + stageTrail * 0.1);
+      auraDisc.material.opacity = aOp * 0.4;
+      auraDisc.scale.setScalar(1 + aPower * 0.5);
+      auraDisc.material.color.setHex(aPower > 0.65 ? 0xa855f7 : 0x67e8f9);
     }
 
     // Juice FX tick
@@ -3640,6 +4198,17 @@
       player.position.z + lookDirZ * 8 + sz * 0.25
     );
     camera.lookAt(lookAt);
+    // Sky locked to FINAL camera pos (avoids sphere-limb "bubble" if updated earlier)
+    if (reactiveSky && reactiveSky.group) {
+      reactiveSky.group.position.copy(camera.position);
+    } else if (skyDome) {
+      skyDome.position.copy(camera.position);
+    }
+    if (cosmicStars && cosmicStars.group) {
+      cosmicStars.group.position.copy(camera.position);
+    } else if (starField && starField.position) {
+      starField.position.copy(camera.position);
+    }
     const targetFov =
       juice.baseFov +
       speed * 0.45 +
@@ -3728,11 +4297,15 @@
       const rt = f.ruins || {};
       const pathSum = (pt.energy || 0) + (pt.branch || 0) + (pt.shortcut || 0) + (pt.hidden || 0);
       const terrSum =
-        (tt.boulders || 0) + (tt.ridge || 0) + (tt.crater || 0) + (tt.cliff || 0) + (tt.floater || 0);
+        (tt.boulders || 0) + (tt.ridge || 0) + (tt.crater || 0) + (tt.cliff || 0) +
+        (tt.floater || 0) + (tt.landmark || 0) + (tt.canyon || 0);
+      const landmarkN = (tt.landmark || 0) + (tt.canyon || 0);
       const vegSum =
         (vt.stalk || 0) + (vt.flower || 0) + (vt.bush || 0) + (vt.vine || 0) +
         (vt.cluster || 0) + (vt.floater || 0) + (vt.canopy || 0) +
-        (vt.tree || 0) + (vt.megaTree || 0) + (vt.spire || 0);
+        (vt.tree || 0) + (vt.megaTree || 0) + (vt.spire || 0) +
+        (vt.forest || 0);
+      const forestN = vt.forest || 0;
       const ruinSum =
         (rt.monolith || 0) + (rt.outpost || 0) + (rt.tower || 0) + (rt.arch || 0) +
         (rt.platform || 0) + (rt.temple || 0) + (rt.wreck || 0);
@@ -3752,6 +4325,12 @@
           (ds.broken ? " 💥" + ds.broken : "") +
           (ds.assists ? " ⚡" + ds.assists : "");
       }
+      const bandTag = f.sceneBand
+        ? " · " + String(f.sceneBand).toUpperCase()
+        : "";
+      const forestTag = forestN > 0 ? " · forests " + forestN : "";
+      const landTag = landmarkN > 0 ? " · landmarks " + landmarkN : "";
+      const sceneTag = f.scenes > 0 ? " · scenes " + f.scenes : "";
       spawnStatsEl.textContent =
         "◈ " + bioName +
         " · " + (state.scaleStage || "paw").toUpperCase() +
@@ -3761,10 +4340,14 @@
         " · " + Math.round(dist) + "m" +
         " · paths " + pathSum +
         " · terrain " + terrSum +
+        landTag +
         " · flora " + vegSum +
+        forestTag +
+        sceneTag +
         " · ruins " + ruinSum +
         " · detail " + detSum +
         " · dens " + Math.round(f.density * 100) + "%" +
+        bandTag +
         " · core " + (state.coreStageId || "spark").toUpperCase() +
         (f.coreWorldMul > 0.01 ? " +" + Math.round(f.coreWorldMul * 100) + "%w" : "") +
         (f.flux > 0.05 ? " · FLUX" : "");
@@ -3809,12 +4392,47 @@
       scene.fog.density = Math.min(scene.fog.density, clearFog);
     }
 
-    // Cosmic stars + nebulae — bloom brighter in orbit/solar
+    // Reactive sky (tiers 1–5) OR legacy starfield
     {
       const dark = Math.max(skyDark, planetVis * 0.8);
       const sb = Math.max(starBoost, 1 + dark * 1.4);
-      if (cosmicStars && cosmicStars.update) {
-        cosmicStars.update(player.position, sb, 0.016);
+      const altN = THREE.MathUtils.clamp(heightAbove / 80, 0, 1);
+      const coreAmt = THREE.MathUtils.clamp((state.starCore || 0) / 100, 0, 1);
+      if (reactiveSky && reactiveSky.update) {
+        const packDrive =
+          state.packEventT > 0
+            ? Math.min(1, state.packEventT * 0.15 + 0.45)
+            : 0;
+        reactiveSky.update({
+          dt: 0.016,
+          cameraPos: camera.position,
+          playerPos: player.position,
+          velocity: state.vel,
+          sprint: !!state.sprinting,
+          momentum: state.momentum || 0,
+          speed: Math.hypot(state.vel.x, state.vel.z),
+          scale: scaleInfo && scaleInfo.progress != null ? scaleInfo.progress : state.transitionProgress || 0,
+          stage: st,
+          skyDark: dark,
+          starBoost: sb,
+          resonance: state.resonance || 0,
+          meaningful: state.meaningfulScore || 0,
+          altitude: altN,
+          planetVis: planetVis,
+          biomeId: (biomeAtmo && biomeAtmo.currentId) || "crystalNebula",
+          // Rim/ambient — saturated; never near-black sky hex
+          biomeTint: biomeAtmo && biomeAtmo.rim,
+          howl: state.howlT > 0 ? Math.min(1, state.howlT * 2) : 0,
+          core: coreAmt,
+          pack: packDrive,
+        });
+      } else if (cosmicStars && cosmicStars.update) {
+        cosmicStars.update(player.position, sb, 0.016, {
+          sprint: state.sprinting ? 1 : state.momentum || 0,
+          biomeId: biomeAtmo && biomeAtmo.currentId,
+          scale: state.transitionProgress || 0,
+          velocity: state.vel,
+        });
       } else {
         if (starFieldMat) {
           const targetOp = THREE.MathUtils.clamp(0.55 + dark * 0.55 * starBoost * 0.5, 0.5, 1);
@@ -3842,8 +4460,8 @@
       );
     }
 
-    // Expand / darken sky dome at high scale
-    if (skyDome) {
+    // Legacy dome scale only if not using reactive sky
+    if (skyDome && !reactiveSky) {
       const targetScale = orbital || planetVis > 0.4 ? 6.5 + skyDark * 2.5 : 1 + skyDark * 0.8;
       const s = skyDome.scale.x;
       const ns = THREE.MathUtils.lerp(s, targetScale, 0.06);
@@ -4042,7 +4660,10 @@
   }
 
   frame();
-  console.log("%cBOLT ENGINE v1.4 FLANKS — subtle paths + side spawns", "color:#34d399;font-weight:bold");
+  console.log(
+    "%cBOLT ENGINE v2.4 · MAX — fixed high graphics, no FPS downgrade",
+    "color:#34d399;font-weight:bold"
+  );
   } catch (err) {
     console.error(err);
     if (statusEl) {

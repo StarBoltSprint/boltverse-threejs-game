@@ -20,10 +20,207 @@
   const SPAWN_THRESHOLD = 0.65;
   const FADE_IN_SEC = 0.85;
   const FADE_OUT_SEC = 2.5;
-  const MAX_ACTIVE = 320;
+  const MAX_ACTIVE = 360;
   const WORLD_R = 1e9; // open world — no practical edge
-  const LOOKAHEAD_MIN = 2.0; // seconds
-  const LOOKAHEAD_MAX = 5.5;
+  const LOOKAHEAD_MIN = 2.4; // seconds — generate farther ahead
+  const LOOKAHEAD_MAX = 6.5;
+
+  /**
+   * Personal space around Bolt — clutter must spawn OUTSIDE these radii.
+   * Paths may sit closer (they are the run lane).
+   */
+  const CLEAR = {
+    player: 26, // absolute minimum bubble for any solid clutter
+    corridorHalf: 14, // half-width of free run lane
+    corridorAhead: 80,
+    corridorBehind: 14,
+    detailMin: 28,
+    detailClear: 26,
+    detailMax: 55,
+    vegMin: 32,
+    vegClear: 30,
+    vegBigMin: 40,
+    vegBigClear: 38,
+    forestMin: 48,
+    forestClear: 44,
+    forestMax: 85,
+    terrainMin: 36,
+    terrainClear: 34,
+    terrainMax: 70,
+    landmarkPlayer: 42,
+    ruinNestPlayer: 38,
+    ruinDistantMin: 95,
+    ruinDistantClear: 85,
+    killTerrain: 28,
+    killLandmark: 36,
+    killForest: 32,
+    killRuin: 30,
+    killDetail: 22,
+    killVeg: 24,
+  };
+
+  // ---------------------------------------------------------------------------
+  // Rich spawn modes — density bands → scene kits
+  // Low: sparse · Medium: groves · High: multi-layer forests · Very high: massive systems
+  // ---------------------------------------------------------------------------
+  const DENSITY_BANDS = {
+    sparse: { id: "sparse", min: 0, max: 0.28 },
+    medium: { id: "medium", min: 0.28, max: 0.55 },
+    high: { id: "high", min: 0.55, max: 0.82 },
+    veryHigh: { id: "veryHigh", min: 0.82, max: 99 },
+  };
+
+  function densityBand(density) {
+    const d = density || 0;
+    if (d < DENSITY_BANDS.medium.min) return DENSITY_BANDS.sparse;
+    if (d < DENSITY_BANDS.high.min) return DENSITY_BANDS.medium;
+    if (d < DENSITY_BANDS.veryHigh.min) return DENSITY_BANDS.high;
+    return DENSITY_BANDS.veryHigh;
+  }
+
+  /**
+   * Scene kit for vegetation (and later terrain/path cooperation).
+   * preferForest → spawn coherent multi-layer forest systems instead of single plants.
+   */
+  function sceneKit(density, biomeId) {
+    const band = densityBand(density);
+    const d = THREE.MathUtils.clamp(density || 0, 0, 1.6);
+    const bid = biomeId || "crystalNebula";
+
+    // Biome density personality
+    let vegBias = 1;
+    let sparseBias = 1;
+    if (bid === "jadeCanopy" || bid === "crystalNebula") vegBias = 1.25;
+    else if (bid === "rosePulse") vegBias = 1.15;
+    else if (bid === "emberVoid") vegBias = 0.95;
+    else if (bid === "whisperStars") {
+      vegBias = 0.72;
+      sparseBias = 1.45;
+    } else if (bid === "frostGlacier") {
+      vegBias = 0.65;
+      sparseBias = 1.35;
+    } else if (bid === "solarGold") vegBias = 0.9;
+
+    // Terrain / path co-authorship knobs (all bands; scale up with density)
+    let terrainBias = 1;
+    if (bid === "emberVoid" || bid === "frostGlacier") terrainBias = 1.3;
+    else if (bid === "whisperStars") terrainBias = 0.85;
+    else if (bid === "jadeCanopy") terrainBias = 0.75;
+
+    const kit = {
+      band: band.id,
+      biomeId: bid,
+      preferForest: false,
+      forestChance: 0,
+      forestRadius: 8,
+      groundCount: 0,
+      midCount: 0,
+      canopyCount: 0,
+      megaChance: 0,
+      corridor: 2.8, // clear strip through forest (sprint path feel)
+      lifeMul: 1,
+      scaleMul: 1,
+      vegWeightMul: vegBias,
+      // Path through scenes
+      pathThroughForest: false,
+      pathLengthMul: 1,
+      pathWidthMul: 1,
+      // Terrain landmarks / canyon flanks
+      preferLandmark: false,
+      landmarkChance: 0,
+      canyonChance: 0,
+      landmarkScale: 1,
+      terrainBias: terrainBias,
+      // Ruins nested in forest footprints (temple at grove edge)
+      preferGroveRuin: false,
+      groveRuinChance: 0,
+      groveTempleChance: 0,
+    };
+
+    if (band.id === "sparse") {
+      kit.preferForest = false;
+      kit.forestChance = 0;
+      kit.groundCount = Math.floor(2 * vegBias);
+      kit.midCount = 0;
+      kit.canopyCount = 0;
+      kit.lifeMul = 0.9;
+      kit.pathThroughForest = false;
+      kit.preferLandmark = false;
+      kit.preferGroveRuin = false;
+    } else if (band.id === "medium") {
+      // Small groves — mini multi-layer, not full forest yet
+      kit.preferForest = d > 0.4 && Math.random() < 0.35 * vegBias;
+      kit.forestChance = 0.4 * vegBias;
+      kit.forestRadius = (7 + d * 6) * sparseBias;
+      kit.groundCount = Math.floor((5 + d * 6) * vegBias);
+      kit.midCount = Math.floor((3 + d * 4) * vegBias);
+      kit.canopyCount = Math.floor((1 + d * 2) * vegBias);
+      kit.megaChance = 0.02;
+      kit.corridor = 2.4;
+      kit.lifeMul = 1.1;
+      kit.scaleMul = 0.95;
+      kit.pathThroughForest = true;
+      kit.pathLengthMul = 1.15;
+      kit.pathWidthMul = 1.05;
+      kit.preferLandmark = d > 0.42;
+      kit.landmarkChance = 0.35 * terrainBias;
+      kit.canyonChance = 0.12 * terrainBias;
+      kit.landmarkScale = 1.0 + d * 0.3;
+      kit.preferGroveRuin = d > 0.4;
+      kit.groveRuinChance = 0.4;
+      kit.groveTempleChance = 0.18;
+    } else if (band.id === "high") {
+      // Full forest systems + ridge/canyon co-authorship
+      kit.preferForest = true;
+      kit.forestChance = 0.72 * vegBias;
+      kit.forestRadius = (14 + d * 12) * Math.min(1.35, sparseBias);
+      kit.groundCount = Math.floor((10 + d * 14) * vegBias);
+      kit.midCount = Math.floor((7 + d * 10) * vegBias);
+      kit.canopyCount = Math.floor((5 + d * 8) * vegBias);
+      kit.megaChance = 0.12 * vegBias;
+      kit.corridor = 3.4;
+      kit.lifeMul = 1.45;
+      kit.scaleMul = 1.05;
+      kit.pathThroughForest = true;
+      kit.pathLengthMul = 1.55;
+      kit.pathWidthMul = 1.15;
+      kit.preferLandmark = true;
+      kit.landmarkChance = 0.72 * terrainBias;
+      kit.canyonChance = 0.4 * terrainBias;
+      kit.landmarkScale = 1.35 + d * 0.55;
+      kit.preferGroveRuin = true;
+      kit.groveRuinChance = 0.78;
+      kit.groveTempleChance = 0.48;
+    } else {
+      // Very high — massive multi-feature forest + canyon zones
+      kit.preferForest = true;
+      kit.forestChance = 0.88 * vegBias;
+      kit.forestRadius = (22 + d * 16) * Math.min(1.4, sparseBias);
+      kit.groundCount = Math.floor((16 + d * 18) * vegBias);
+      kit.midCount = Math.floor((12 + d * 14) * vegBias);
+      kit.canopyCount = Math.floor((9 + d * 12) * vegBias);
+      kit.megaChance = 0.28 * vegBias;
+      kit.corridor = 4.0;
+      kit.lifeMul = 1.75;
+      kit.scaleMul = 1.12;
+      kit.pathThroughForest = true;
+      kit.pathLengthMul = 2.0;
+      kit.pathWidthMul = 1.28;
+      kit.preferLandmark = true;
+      kit.landmarkChance = 0.9 * terrainBias;
+      kit.canyonChance = 0.62 * terrainBias;
+      kit.landmarkScale = 1.7 + d * 0.7;
+      kit.preferGroveRuin = true;
+      kit.groveRuinChance = 0.92;
+      kit.groveTempleChance = 0.72;
+    }
+
+    // Hard caps for performance (one entity = whole forest)
+    kit.groundCount = Math.min(kit.groundCount, 28);
+    kit.midCount = Math.min(kit.midCount, 22);
+    kit.canopyCount = Math.min(kit.canopyCount, 18);
+    return kit;
+  }
 
   // ---------------------------------------------------------------------------
   // Lightweight noise (hash-based value noise + fbm) — no external lib
@@ -64,7 +261,7 @@
    * Biomes = large cosmic regions (look + generator behavior + atmosphere).
    * CELL size makes regions feel like distinct "countries" of the cosmos.
    */
-  const BIOME_CELL = 320; // world units — clearly different environments while traveling
+  const BIOME_CELL = 260; // world units — cross biomes more often while sprinting
 
   const BIOMES = {
     crystalNebula: {
@@ -81,8 +278,8 @@
       plantEmissive: 0x7c3aed,
       path: 0x67e8f9,
       ruin: 0x94a3b8,
-      sky: 0x061428,
-      fog: 0x0a2848,
+      sky: 0x041830,
+      fog: 0x0c3860,
       ambient: 0x5eead4,
       sun: 0xa5f3fc,
       rim: 0x22d3ee,
@@ -109,8 +306,8 @@
       plantEmissive: 0xc2410c,
       path: 0xfbbf24,
       ruin: 0x78716c,
-      sky: 0x120805,
-      fog: 0x2a1008,
+      sky: 0x1a0804,
+      fog: 0x3a1408,
       ambient: 0xfb923c,
       sun: 0xfed7aa,
       rim: 0xef4444,
@@ -137,8 +334,8 @@
       plantEmissive: 0x8b5cf6,
       path: 0xa5b4fc,
       ruin: 0xcbd5e1,
-      sky: 0x04040f,
-      fog: 0x0c0c22,
+      sky: 0x08061a,
+      fog: 0x14102e,
       ambient: 0xa5b4fc,
       sun: 0xe0e7ff,
       rim: 0xc4b5fd,
@@ -166,8 +363,8 @@
       plantEmissive: 0xfbbf24,
       path: 0xfcd34d,
       ruin: 0xd6d3d1,
-      sky: 0x1a1005,
-      fog: 0x2a1a08,
+      sky: 0x1e1206,
+      fog: 0x3a2208,
       ambient: 0xfbbf24,
       sun: 0xfef3c7,
       rim: 0xf59e0b,
@@ -188,8 +385,8 @@
       plantEmissive: 0x7dd3fc,
       path: 0xa5f3fc,
       ruin: 0xe2e8f0,
-      sky: 0x06101c,
-      fog: 0x0c1a2e,
+      sky: 0x061420,
+      fog: 0x0c2840,
       ambient: 0x93c5fd,
       sun: 0xe0f2fe,
       rim: 0x38bdf8,
@@ -210,8 +407,8 @@
       plantEmissive: 0x34d399,
       path: 0x5eead4,
       ruin: 0x86efac,
-      sky: 0x04120e,
-      fog: 0x0a2218,
+      sky: 0x051a10,
+      fog: 0x0c2e1c,
       ambient: 0x34d399,
       sun: 0xd1fae5,
       rim: 0x10b981,
@@ -232,8 +429,8 @@
       plantEmissive: 0xf472b6,
       path: 0xf0abfc,
       ruin: 0xe9d5ff,
-      sky: 0x120810,
-      fog: 0x220818,
+      sky: 0x160810,
+      fog: 0x2e0c1c,
       ambient: 0xf472b6,
       sun: 0xfce7f3,
       rim: 0xec4899,
@@ -243,8 +440,21 @@
     },
   };
 
-  // Surface wandering biomes (cells) + full set for planet landings
-  const BIOME_LIST = [BIOMES.crystalNebula, BIOMES.emberVoid, BIOMES.whisperStars];
+  // All biomes wander the surface; planet landings still use PLANET_BIOME_MAP
+  const SURFACE_BIOME_IDS = [
+    "crystalNebula",
+    "emberVoid",
+    "whisperStars",
+    "solarGold",
+    "frostGlacier",
+    "jadeCanopy",
+    "rosePulse",
+  ];
+  const BIOME_LIST = SURFACE_BIOME_IDS.map(function (id) {
+    return BIOMES[id];
+  });
+  const BIOME_COUNT = SURFACE_BIOME_IDS.length;
+
   /** Map companion-planet hue → biome id when Bolt lands */
   const PLANET_BIOME_MAP = {
     ember: "emberVoid",
@@ -265,27 +475,49 @@
     return forceBiomeId;
   }
 
+  function emptyMix() {
+    const m = Object.create(null);
+    for (let i = 0; i < SURFACE_BIOME_IDS.length; i++) m[SURFACE_BIOME_IDS[i]] = 0;
+    return m;
+  }
+
   function cellBiomeId(cx, cz) {
-    // Stable hash → 0,1,2
+    // Stable hash → weighted 7-biome layout (uneven for character)
     const h = hash2(cx * 1.7, cz * 2.3);
-    if (h < 0.38) return "crystalNebula";
-    if (h < 0.70) return "emberVoid";
-    return "whisperStars";
+    if (h < 0.16) return "crystalNebula";
+    if (h < 0.32) return "emberVoid";
+    if (h < 0.46) return "whisperStars";
+    if (h < 0.58) return "solarGold";
+    if (h < 0.70) return "frostGlacier";
+    if (h < 0.85) return "jadeCanopy";
+    return "rosePulse";
   }
 
   /**
-   * Large cells + soft edge blend so regions feel distinct but not harsh cuts.
-   * Resonance can slightly expand Crystal influence (joy → more ethereal cosmos).
+   * Domain-warp world XZ so biome regions are organic blobs, not grid squares.
+   */
+  function warpBiomeCoord(x, z) {
+    const a = fbm(x * 0.0055, z * 0.0055, 3);
+    const b = fbm(x * 0.0055 + 41.7, z * 0.0055 - 19.3, 3);
+    const c = fbm(x * 0.011 + 7, z * 0.011 + 3, 2);
+    const amp = BIOME_CELL * 0.72;
+    return {
+      x: x + (a - 0.5) * amp + (c - 0.5) * amp * 0.35,
+      z: z + (b - 0.5) * amp + (c - 0.5) * amp * 0.28,
+    };
+  }
+
+  /**
+   * Large soft regions via warped distance-to-cell-centers (no hard square edges).
+   * Returns mix weights, primary, and edge=0..1 how transitional the point is.
    * forceBiomeId locks the whole world to a landed planet's biome.
    */
   function sampleBiome(x, z, resonance) {
     // Landed on another world — full biome takeover
     if (forceBiomeId && BIOMES[forceBiomeId]) {
       const b = BIOMES[forceBiomeId];
-      const mix = { crystalNebula: 0, emberVoid: 0, whisperStars: 0 };
+      const mix = emptyMix();
       mix[forceBiomeId] = 1;
-      // ensure keys exist for mix consumers
-      if (mix[forceBiomeId] == null) mix[forceBiomeId] = 1;
       return {
         primary: b,
         mix: mix,
@@ -295,56 +527,123 @@
       };
     }
     const res = resonance || 0;
-    const fx = x / BIOME_CELL;
-    const fz = z / BIOME_CELL;
-    const cx = Math.floor(fx);
-    const cz = Math.floor(fz);
-    // Distance to cell center (0 center → 1 edge)
-    const lx = fx - cx - 0.5;
-    const lz = fz - cz - 0.5;
-    const edge = Math.max(Math.abs(lx), Math.abs(lz)) * 2; // 0..1 toward edge
-    const blend = THREE.MathUtils.smoothstep(0.55, 0.98, edge);
+    const wpt = warpBiomeCoord(x, z);
+    const fx = wpt.x / BIOME_CELL;
+    const fz = wpt.z / BIOME_CELL;
+    const cx0 = Math.floor(fx);
+    const cz0 = Math.floor(fz);
 
-    const idMain = cellBiomeId(cx, cz);
-    // Neighbor bias for blend zone
-    const nx = lx > 0 ? cx + 1 : cx - 1;
-    const nz = lz > 0 ? cz + 1 : cz - 1;
-    const idNbX = cellBiomeId(nx, cz);
-    const idNbZ = cellBiomeId(cx, nz);
+    const w = emptyMix();
+    // Soft influence from 3×3 (and corners) — organic borders, not axis-aligned lines
+    const influenceR = BIOME_CELL * 1.05;
+    let top1 = 0;
+    let top2 = 0;
 
-    let w = { crystalNebula: 0, emberVoid: 0, whisperStars: 0 };
-    w[idMain] += 1 - blend * 0.65;
-    w[idNbX] += blend * 0.35 * Math.abs(lx) * 2;
-    w[idNbZ] += blend * 0.35 * Math.abs(lz) * 2;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const cx = cx0 + dx;
+        const cz = cz0 + dz;
+        const id = cellBiomeId(cx, cz);
+        // Jittered cell centers → meandering frontier
+        const jx = (hash2(cx * 2.1, cz * 3.7) - 0.5) * BIOME_CELL * 0.42;
+        const jz = (hash2(cz * 4.3, cx * 1.9) - 0.5) * BIOME_CELL * 0.42;
+        const ccx = (cx + 0.5) * BIOME_CELL + jx;
+        const ccz = (cz + 0.5) * BIOME_CELL + jz;
+        const d = Math.hypot(wpt.x - ccx, wpt.z - ccz);
+        // Smooth falloff (quadratic) — wide transition belt
+        let t = 1 - THREE.MathUtils.smoothstep(0, influenceR, d);
+        t = t * t;
+        // Extra noise freckles so the border isn't a smooth ellipse either
+        const freckle = 0.85 + fbm(ccx * 0.01 + x * 0.004, ccz * 0.01 + z * 0.004, 2) * 0.3;
+        t *= freckle;
+        w[id] += t;
+        if (t > top1) {
+          top2 = top1;
+          top1 = t;
+        } else if (t > top2) {
+          top2 = t;
+        }
+      }
+    }
 
     // Resonance gently boosts Crystal Nebula (Pack joy → living light)
-    w.crystalNebula += res * 0.12;
+    w.crystalNebula += res * 0.08;
 
-    // Soft noise variation so cells aren't perfect squares
-    const n = fbm(x * 0.004, z * 0.004, 2);
-    w.emberVoid += (n - 0.5) * 0.08;
-    w.whisperStars += (0.5 - n) * 0.06;
+    // Gentle regional mottling (never enough to hard-swap alone)
+    const n = fbm(x * 0.0035, z * 0.0035, 3);
+    w.emberVoid += Math.max(0, (n - 0.58) * 0.06);
+    w.whisperStars += Math.max(0, (0.42 - n) * 0.05);
+    w.jadeCanopy += Math.max(0, (fbm(x * 0.0028 + 9, z * 0.0028, 2) - 0.58) * 0.05);
+    w.rosePulse += Math.max(0, (fbm(x * 0.0028 - 4, z * 0.0028 + 2, 2) - 0.6) * 0.05);
+    w.solarGold += Math.max(0, (fbm(x * 0.003 + 12, z * 0.003 - 8, 2) - 0.62) * 0.04);
+    w.frostGlacier += Math.max(0, (fbm(x * 0.003 - 11, z * 0.003 + 5, 2) - 0.62) * 0.04);
 
-    let sum = w.crystalNebula + w.emberVoid + w.whisperStars;
+    let sum = 0;
+    for (let i = 0; i < SURFACE_BIOME_IDS.length; i++) sum += w[SURFACE_BIOME_IDS[i]];
     if (sum < 1e-6) sum = 1;
-    w.crystalNebula /= sum;
-    w.emberVoid /= sum;
-    w.whisperStars /= sum;
+    for (let i = 0; i < SURFACE_BIOME_IDS.length; i++) {
+      w[SURFACE_BIOME_IDS[i]] /= sum;
+    }
 
     let primary = BIOMES.crystalNebula;
-    let maxW = w.crystalNebula;
-    if (w.emberVoid > maxW) {
-      primary = BIOMES.emberVoid;
-      maxW = w.emberVoid;
+    let maxW = -1;
+    let second = 0;
+    for (let i = 0; i < SURFACE_BIOME_IDS.length; i++) {
+      const id = SURFACE_BIOME_IDS[i];
+      const ww = w[id];
+      if (ww > maxW) {
+        second = maxW;
+        maxW = ww;
+        primary = BIOMES[id];
+      } else if (ww > second) {
+        second = ww;
+      }
     }
-    if (w.whisperStars > maxW) primary = BIOMES.whisperStars;
+    // edge: 0 pure core · 1 strong multi-biome transition
+    const edge = THREE.MathUtils.clamp(
+      1 - (maxW - second) * 2.2,
+      0,
+      1
+    );
 
     return {
       primary: primary,
       mix: w,
-      edge: blend,
-      cell: { cx: cx, cz: cz },
+      edge: edge,
+      cell: { cx: cx0, cz: cz0 },
     };
+  }
+
+  /**
+   * Lerp a hex ground/plant color by mix weights (for vertex tints / atmosphere).
+   * target: THREE.Color out
+   */
+  function mixBiomeColor(mix, channel, target) {
+    channel = channel || "ground";
+    if (!target) target = new THREE.Color();
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let s = 0;
+    const tmp = new THREE.Color();
+    for (let i = 0; i < SURFACE_BIOME_IDS.length; i++) {
+      const id = SURFACE_BIOME_IDS[i];
+      const wt = mix[id] || 0;
+      if (wt < 0.01) continue;
+      const def = BIOMES[id];
+      const hex = def[channel] != null ? def[channel] : def.ground;
+      tmp.setHex(hex);
+      r += tmp.r * wt;
+      g += tmp.g * wt;
+      b += tmp.b * wt;
+      s += wt;
+    }
+    if (s < 1e-6) {
+      target.setHex(BIOMES.crystalNebula.ground);
+    } else {
+      target.setRGB(r / s, g / s, b / s);
+    }
+    return target;
   }
 
   /** Lerp atmosphere colors for smooth biome transitions */
@@ -364,13 +663,13 @@
     update(x, z, resonance, dt, scene, lights) {
       this._target = sampleBiome(x, z, resonance);
       const b = this._target.primary;
-      const t = 1 - Math.exp(-1.8 * dt); // smooth blend
+      const t = 1 - Math.exp(-3.2 * dt); // snappier biome atmo (sky/fog/lights)
       this.sky.lerp(new THREE.Color(b.sky), t);
       this.fog.lerp(new THREE.Color(b.fog), t);
       this.ambient.lerp(new THREE.Color(b.ambient), t);
       this.sun.lerp(new THREE.Color(b.sun), t);
       this.rim.lerp(new THREE.Color(b.rim), t);
-      this.fogDensity = THREE.MathUtils.damp(this.fogDensity, b.fogDensity, 2.0, dt);
+      this.fogDensity = THREE.MathUtils.damp(this.fogDensity, b.fogDensity, 3.0, dt);
       this.currentId = b.id;
       this.displayName = b.name;
 
@@ -555,10 +854,41 @@
       return e;
     }
 
-    update(dt, meaningfulActive) {
+    update(dt, meaningfulActive, playerPos) {
       for (let i = this.live.length - 1; i >= 0; i--) {
         const e = this.live[i];
         e.age += dt;
+        // Emergency clear: anything that drifts into Bolt's bubble fades out fast
+        if (
+          playerPos &&
+          (this.kind === "terrain" ||
+            this.kind === "vegetation" ||
+            this.kind === "ruin" ||
+            this.kind === "detail") &&
+          e.mesh &&
+          e.mesh.position
+        ) {
+          const dx = e.mesh.position.x - playerPos.x;
+          const dz = e.mesh.position.z - playerPos.z;
+          const distSq = dx * dx + dz * dz;
+          const ud = e.mesh.userData || {};
+          let killR = CLEAR.killVeg;
+          if (this.kind === "terrain") {
+            killR = ud.landmark ? CLEAR.killLandmark : CLEAR.killTerrain;
+          } else if (this.kind === "vegetation") {
+            killR = ud.forest ? CLEAR.killForest : CLEAR.killVeg;
+          } else if (this.kind === "ruin") {
+            killR = CLEAR.killRuin;
+          } else if (this.kind === "detail") {
+            killR = CLEAR.killDetail;
+          }
+          if (distSq < killR * killR) {
+            e.fadingOut = true;
+            e.fade = Math.min(e.fade, 0.12);
+            // Fast dissolve when on top of player
+            e.fade = Math.max(0, e.fade - dt * 2.5);
+          }
+        }
         if ((!meaningfulActive || e.age > e.life) && !e.fadingOut) {
           e.fadingOut = true;
         }
@@ -782,27 +1112,55 @@
    * Sample points along a noise-warped route (spline-like)
    * @returns {THREE.Vector3[]}
    */
-  function generatePathPoints(start, yaw, typeDef, density, heightAt, seed) {
+  /**
+   * Sample points along a noise-warped route.
+   * guide: { targetX, targetZ, stick, lengthMul, throughForest }
+   *  — steers path through forest / canyon corridors when co-authoring scenes.
+   */
+  function generatePathPoints(start, yaw, typeDef, density, heightAt, seed, guide) {
     const pts = [];
-    const segs = typeDef.segs + Math.floor(density * 8) + 4;
-    const len = typeDef.length * (1.15 + density * 0.95);
+    const g = guide || null;
+    const lenMul = g && g.lengthMul != null ? g.lengthMul : 1;
+    const segs =
+      typeDef.segs +
+      Math.floor(density * 8) +
+      4 +
+      (g && g.throughForest ? 6 : 0);
+    const len = typeDef.length * (1.15 + density * 0.95) * lenMul;
     const step = len / segs;
     let x = start.x;
     let z = start.z;
     let dir = yaw;
     // Prefer mostly-forward paths so Bolt always has a lane to run into
     const curve = typeDef.curve * (typeDef.id === "hidden" ? 1.0 : 0.75);
+    const stick = g && g.stick != null ? g.stick : typeDef.id === "shortcut" ? 0.55 : 0.35;
+
+    // Precompute target bearing if routing through a scene footprint
+    let targetYaw = yaw;
+    if (g && g.targetX != null && g.targetZ != null) {
+      targetYaw = Math.atan2(g.targetX - start.x, g.targetZ - start.z);
+    }
 
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
       const n = (noise2(seed + x * 0.05, seed + z * 0.05) - 0.5) * 2;
       const n2 = (noise2(seed + z * 0.08, seed + x * 0.07) - 0.5) * 2;
       if (i > 0) {
-        dir += n * curve * 0.4;
-        // Stay aimed with Bolt's heading (beautiful run corridor)
-        dir = THREE.MathUtils.lerp(dir, yaw, typeDef.id === "shortcut" ? 0.55 : 0.35);
-        if (typeDef.id === "energy") {
+        // Pull toward forest/canyon center early, then exit along run heading
+        const aim =
+          g && g.throughForest
+            ? t < 0.55
+              ? THREE.MathUtils.lerp(yaw, targetYaw, 0.65)
+              : THREE.MathUtils.lerp(targetYaw, yaw, (t - 0.55) / 0.45)
+            : yaw;
+        dir += n * curve * (g && g.throughForest ? 0.22 : 0.4);
+        dir = THREE.MathUtils.lerp(dir, aim, stick);
+        if (typeDef.id === "energy" && !(g && g.throughForest)) {
           dir = yaw + Math.sin(t * Math.PI * 1.2 + seed) * 0.35 * Math.max(0.2, curve);
+        }
+        // Through forest: gentle S only — stay in corridor
+        if (g && g.throughForest) {
+          dir += Math.sin(t * Math.PI * 1.6 + seed) * 0.08;
         }
         x += Math.sin(dir) * step;
         z += Math.cos(dir) * step;
@@ -911,12 +1269,23 @@
       const col = biome.path || biome.color;
       const em = biome.emissive || col;
 
-      // Main ribbon — subtle guide path (thin + soft glow)
-      const mainPts = generatePathPoints(start, yaw, typeDef, Math.max(0.45, density), heightAt, seed);
+      // Main ribbon — subtle guide path (thin + soft glow); guide routes through forests
+      const pathGuide = opts.guide || null;
+      const mainPts = generatePathPoints(
+        start,
+        yaw,
+        typeDef,
+        Math.max(0.45, density),
+        heightAt,
+        seed,
+        pathGuide
+      );
+      const widthMul = pathGuide && pathGuide.widthMul != null ? pathGuide.widthMul : 1;
       const radius =
         typeDef.width *
         (0.7 + density * 0.25) *
-        (typeDef.id === "hidden" ? 0.65 : 0.85);
+        (typeDef.id === "hidden" ? 0.65 : 0.85) *
+        widthMul;
 
       function toLocal(meshOrGroup) {
         if (!meshOrGroup) return;
@@ -1097,6 +1466,9 @@
     crater: { id: "crater", name: "Crater" },
     cliff: { id: "cliff", name: "Cliff Face" },
     floater: { id: "floater", name: "Floating Rock" },
+    /** Large co-authored landmark — long ridge wall or canyon pair */
+    landmark: { id: "landmark", name: "Landform Landmark" },
+    canyon: { id: "canyon", name: "Canyon Corridor" },
   };
 
   function pickTerrainType(density, biomeId) {
@@ -1115,12 +1487,55 @@
       if (r < 0.7) return TERRAIN_TYPES.cliff;
       return TERRAIN_TYPES.floater; // more dramatic floaters
     }
+    if (biomeId === "frostGlacier") {
+      if (r < 0.2) return TERRAIN_TYPES.boulders;
+      if (r < 0.45) return TERRAIN_TYPES.ridge;
+      if (r < 0.6) return TERRAIN_TYPES.crater;
+      if (r < 0.9) return TERRAIN_TYPES.cliff;
+      return TERRAIN_TYPES.floater;
+    }
+    if (biomeId === "solarGold") {
+      if (r < 0.35) return TERRAIN_TYPES.boulders;
+      if (r < 0.55) return TERRAIN_TYPES.ridge;
+      if (r < 0.8) return TERRAIN_TYPES.crater;
+      if (r < 0.92) return TERRAIN_TYPES.cliff;
+      return TERRAIN_TYPES.floater;
+    }
+    if (biomeId === "jadeCanopy") {
+      if (r < 0.45) return TERRAIN_TYPES.boulders;
+      if (r < 0.7) return TERRAIN_TYPES.ridge;
+      if (r < 0.82) return TERRAIN_TYPES.crater;
+      if (r < 0.93) return TERRAIN_TYPES.cliff;
+      return TERRAIN_TYPES.floater;
+    }
+    if (biomeId === "rosePulse") {
+      if (r < 0.4) return TERRAIN_TYPES.boulders;
+      if (r < 0.55) return TERRAIN_TYPES.ridge;
+      if (r < 0.7) return TERRAIN_TYPES.crater;
+      if (r < 0.85) return TERRAIN_TYPES.cliff;
+      return TERRAIN_TYPES.floater;
+    }
     // Crystal — gentler
     if (r < 0.4) return TERRAIN_TYPES.boulders;
     if (r < 0.6) return TERRAIN_TYPES.ridge;
     if (r < 0.78) return TERRAIN_TYPES.crater;
     if (r < 0.9) return TERRAIN_TYPES.cliff;
     return TERRAIN_TYPES.floater;
+  }
+
+  /** High-band pick: prefer landmarks / canyons over small props */
+  function pickLandmarkType(density, biomeId, kit) {
+    const d = density || 0;
+    const canyonP = (kit && kit.canyonChance) || 0.35;
+    if (Math.random() < canyonP) return TERRAIN_TYPES.canyon;
+    if (biomeId === "emberVoid" || biomeId === "frostGlacier") {
+      return Math.random() < 0.55 ? TERRAIN_TYPES.canyon : TERRAIN_TYPES.landmark;
+    }
+    if (biomeId === "whisperStars") {
+      return Math.random() < 0.4 ? TERRAIN_TYPES.landmark : TERRAIN_TYPES.floater;
+    }
+    if (d > 0.75 && Math.random() < 0.35) return TERRAIN_TYPES.canyon;
+    return TERRAIN_TYPES.landmark;
   }
 
   function createTerrainMesh() {
@@ -1147,7 +1562,16 @@
       const rockCol = biome.rock || 0x4a5568;
       const accent = biome.color || 0x67e8f9;
       const em = biome.emissive || accent;
-      const jagged = biome.id === "emberVoid" ? 1.35 : biome.id === "whisperStars" ? 0.9 : 0.75;
+      const jagged =
+        biome.id === "emberVoid"
+          ? 1.35
+          : biome.id === "frostGlacier"
+            ? 1.2
+            : biome.id === "whisperStars"
+              ? 0.9
+              : biome.id === "jadeCanopy" || biome.id === "rosePulse"
+                ? 0.7
+                : 0.75;
       const scaleMul = 0.9 + density * 0.9;
 
       function rockMat(extraEm) {
@@ -1285,6 +1709,114 @@
           d.castShadow = true;
           group.add(d);
         }
+      } else if (type.id === "landmark" || type.id === "canyon") {
+        // Large co-authored landform — long ridge wall(s) framing a run corridor
+        const lmScale = (opts.landmarkScale != null ? opts.landmarkScale : 1) * scaleMul;
+        const segs = 6 + Math.floor(density * 6) + (type.id === "canyon" ? 3 : 0);
+        const span = (10 + density * 14) * lmScale; // length along path (local Z)
+        const wallOff = type.id === "canyon"
+          ? (3.2 + density * 1.8) * lmScale
+          : (2.4 + density * 1.2) * lmScale;
+        const walls = type.id === "canyon" ? 2 : 1;
+        const sideSign0 = opts.sideSign != null ? opts.sideSign : 1;
+
+        for (let w = 0; w < walls; w++) {
+          const side = walls === 2 ? (w === 0 ? -1 : 1) : sideSign0;
+          for (let i = 0; i < segs; i++) {
+            const t = i / Math.max(1, segs - 1);
+            const along = (t - 0.5) * span;
+            // Taller mid-wall, lower ends — reads as a landform silhouette
+            const hMul = 0.55 + Math.sin(t * Math.PI) * 0.75 + density * 0.35;
+            const s = (1.1 + noise2(seed + i + w * 7, seed) * 1.4) * lmScale * jagged * hMul;
+            const geo =
+              biome.id === "emberVoid"
+                ? new THREE.TetrahedronGeometry(s * 0.65, 0)
+                : biome.id === "frostGlacier"
+                  ? new THREE.BoxGeometry(s * 0.55, s * 1.4, s * 0.7)
+                  : biome.id === "crystalNebula"
+                    ? new THREE.DodecahedronGeometry(s * 0.5, 0)
+                    : new THREE.BoxGeometry(s * 0.65, s * (1.0 + jagged * 0.4), s * 0.85);
+            const rock = new THREE.Mesh(geo, rockMat(i % 4 === 0 && biome.id === "crystalNebula"));
+            const jitter = (noise2(i * 1.3, seed + w) - 0.5) * 1.1 * lmScale;
+            rock.position.set(
+              side * (wallOff + jitter * 0.4),
+              s * 0.32,
+              along + jitter * 0.3
+            );
+            rock.scale.set(1, 0.7 + noise2(seed, i) * 0.6 * jagged, 1);
+            rock.rotation.y = (noise2(i, seed) - 0.5) * 0.55;
+            rock.rotation.z = side * (noise2(seed, i) - 0.5) * 0.25 * jagged;
+            rock.castShadow = true;
+            rock.receiveShadow = true;
+            group.add(rock);
+            // Ember: hot veins · Crystal: gem chips · Frost: ice sheen
+            if (i % 3 === 0) {
+              if (biome.id === "emberVoid") {
+                const vein = new THREE.Mesh(
+                  new THREE.BoxGeometry(0.08 * s, s * 0.7, 0.08 * s),
+                  mkMat(0xf97316, { emissive: 0xea580c, emissiveIntensity: 1.1, opacity: 0.85 })
+                );
+                vein.position.copy(rock.position);
+                vein.position.y += s * 0.2;
+                group.add(vein);
+              } else if (biome.id === "crystalNebula" || biome.id === "frostGlacier") {
+                const gem = new THREE.Mesh(
+                  new THREE.OctahedronGeometry(s * 0.14, 0),
+                  mkMat(accent, { emissive: em, emissiveIntensity: 0.9, metalness: 0.5, roughness: 0.2 })
+                );
+                gem.position.copy(rock.position);
+                gem.position.y += s * 0.4;
+                group.add(gem);
+              }
+            }
+          }
+        }
+
+        // Canyon floor glow strip (run invitation between walls)
+        if (type.id === "canyon") {
+          const stripLen = span * 0.95;
+          const strip = new THREE.Mesh(
+            new THREE.BoxGeometry(wallOff * 1.1, 0.06, stripLen),
+            mkMat(accent, {
+              emissive: em,
+              emissiveIntensity: 0.55,
+              opacity: 0.28,
+              roughness: 0.4,
+            })
+          );
+          strip.position.y = 0.04;
+          group.add(strip);
+          // End mouth rocks (gate feel)
+          for (let e = 0; e < 2; e++) {
+            const ez = (e === 0 ? -1 : 1) * span * 0.48;
+            for (let s = -1; s <= 1; s += 2) {
+              const mouth = new THREE.Mesh(
+                new THREE.DodecahedronGeometry(0.7 * lmScale * jagged, 0),
+                rockMat(false)
+              );
+              mouth.position.set(s * wallOff * 0.75, 0.4 * lmScale, ez);
+              mouth.castShadow = true;
+              group.add(mouth);
+            }
+          }
+        } else {
+          // Single landmark wall: boulder scatter on the open side of the corridor
+          const nB = 3 + Math.floor(density * 3);
+          for (let i = 0; i < nB; i++) {
+            const bs = (0.45 + Math.random() * 0.7) * lmScale;
+            const b = new THREE.Mesh(
+              new THREE.IcosahedronGeometry(bs * 0.55, 0),
+              rockMat(false)
+            );
+            b.position.set(
+              -sideSign0 * (1.2 + Math.random() * 2.5) * lmScale,
+              bs * 0.25,
+              (Math.random() - 0.5) * span * 0.7
+            );
+            b.castShadow = true;
+            group.add(b);
+          }
+        }
       } else {
         // Floating rock chunk (Whisper dramatic / Ember unstable)
         const s = (1.4 + density * 1.5) * scaleMul;
@@ -1308,6 +1840,49 @@
 
       group.userData.kind = "terrain";
       group.userData.terrainType = type.id;
+      group.userData.landmark = type.id === "landmark" || type.id === "canyon";
+      // Walk / wall collision for big landforms (local space; world-transformed at query)
+      const walk = [];
+      const walls = [];
+      const lmScale = (opts.landmarkScale != null ? opts.landmarkScale : 1) * scaleMul;
+      if (type.id === "landmark" || type.id === "canyon") {
+        const span = (10 + density * 14) * lmScale;
+        const wallOff = type.id === "canyon"
+          ? (3.2 + density * 1.8) * lmScale
+          : (2.4 + density * 1.2) * lmScale;
+        const wallH = (2.2 + density * 2.5) * lmScale * jagged;
+        if (type.id === "canyon") {
+          // Floor strip between walls is walkable
+          walk.push({ lx: 0, lz: 0, half: wallOff * 0.95, top: 0.35 });
+          walls.push({ lx: -wallOff, lz: 0, half: 1.4 * lmScale, y0: 0, y1: wallH });
+          walls.push({ lx: wallOff, lz: 0, half: 1.4 * lmScale, y0: 0, y1: wallH });
+        } else {
+          walls.push({ lx: wallOff * 0.5, lz: 0, halfX: 2.2 * lmScale, halfZ: span * 0.45, y0: 0, y1: wallH });
+          walk.push({ lx: 0, lz: 0, half: wallOff * 0.7, top: 0.3 });
+        }
+      } else if (type.id === "boulders") {
+        const spread = 2.2 + density * 2.5;
+        walk.push({ lx: 0, lz: 0, half: spread * 0.55, top: 1.1 * scaleMul * jagged });
+        walls.push({ lx: 0, lz: 0, half: spread * 0.5, y0: 0, y1: 2.2 * scaleMul * jagged });
+      } else if (type.id === "ridge") {
+        const span = 6 + density * 4;
+        walls.push({ lx: 0, lz: 0, halfX: span * 0.55, halfZ: 1.4 * jagged, y0: 0, y1: 2.5 * scaleMul * jagged });
+        walk.push({ lx: 0, lz: 0, half: span * 0.4, top: 1.4 * scaleMul * jagged });
+      } else if (type.id === "cliff") {
+        const h = (2.5 + density * 3.5) * scaleMul * jagged;
+        const w = 3.5 + density * 2;
+        walls.push({ lx: 0, lz: 0, halfX: w * 0.55, halfZ: 1.2, y0: 0, y1: h });
+        walk.push({ lx: 0, lz: -0.4, half: w * 0.4, top: h * 0.92 });
+      } else if (type.id === "crater") {
+        const R = 2.2 + density * 2.5;
+        walk.push({ lx: 0, lz: 0, half: R * 0.85, top: 0.4 });
+        walls.push({ lx: 0, lz: 0, half: R * 0.95, y0: 0, y1: 1.2 * scaleMul });
+      } else {
+        // floaters — soft solid body only
+        walls.push({ lx: 0, lz: 0, half: 1.2 * scaleMul, y0: 0.5, y1: 3 * scaleMul });
+      }
+      group.userData.walkColliders = walk;
+      group.userData.wallColliders = walls;
     },
   };
 
@@ -1327,6 +1902,8 @@
     tree: { id: "tree", name: "World Tree" },
     megaTree: { id: "megaTree", name: "Skywood Giant" },
     spire: { id: "spire", name: "Crystal Spire Tree" },
+    /** Multi-layer forest system — entire grove in one pooled entity */
+    forest: { id: "forest", name: "Living Forest" },
   };
 
   function pickVegType(density, biomeId, noiseVal) {
@@ -1362,6 +1939,27 @@
       if (r < 0.8) return VEG_TYPES.bush;
       return VEG_TYPES.cluster;
     }
+    if (biomeId === "frostGlacier") {
+      if (r < 0.35) return VEG_TYPES.spire;
+      if (r < 0.55) return VEG_TYPES.stalk;
+      if (r < 0.7) return VEG_TYPES.floater;
+      if (r < 0.85) return VEG_TYPES.cluster;
+      return VEG_TYPES.flower;
+    }
+    if (biomeId === "solarGold") {
+      if (r < 0.3) return VEG_TYPES.bush;
+      if (r < 0.5) return VEG_TYPES.stalk;
+      if (r < 0.7) return VEG_TYPES.flower;
+      if (r < 0.88) return VEG_TYPES.cluster;
+      return VEG_TYPES.tree;
+    }
+    if (biomeId === "rosePulse") {
+      if (r < 0.28) return VEG_TYPES.flower;
+      if (r < 0.5) return VEG_TYPES.bush;
+      if (r < 0.68) return VEG_TYPES.vine;
+      if (r < 0.85) return VEG_TYPES.stalk;
+      return VEG_TYPES.canopy;
+    }
     // Crystal Nebula — ethereal + trees
     if (density > 0.4 && n > 0.55 && r < 0.28) return VEG_TYPES.canopy;
     if (r < 0.18) return VEG_TYPES.tree;
@@ -1386,8 +1984,11 @@
         const c = group.children.pop();
         if (c.geometry) c.geometry.dispose();
         if (c.material) {
-          if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
-          else c.material.dispose();
+          const mats = Array.isArray(c.material) ? c.material : [c.material];
+          mats.forEach(function (m) {
+            // Never dispose shared bark/foliage caches
+            if (m && !m.userData.shared) m.dispose();
+          });
         }
       }
 
@@ -1407,10 +2008,29 @@
       const countMul = 0.55 + density * 1.6 + (isCrystal ? 0.25 : 0) - (isWhisper ? 0.2 : 0);
       const swayParts = [];
 
+      const biomeId = biome.id || "crystalNebula";
+      // Shared textured mats (tier B) — fallback to flat mkMat
+      let barkMatShared = null;
+      let foliageMatShared = null;
+      let foliageUnderShared = null;
+      if (global.BoltGraphics && global.BoltGraphics.makeBarkMaterial) {
+        barkMatShared = global.BoltGraphics.makeBarkMaterial(biomeId);
+        barkMatShared.userData.shared = true;
+        foliageMatShared = global.BoltGraphics.makeFoliageMaterial(biomeId, plantCol, plantEm);
+        foliageMatShared.userData.shared = true;
+        foliageUnderShared = foliageMatShared.clone();
+        foliageUnderShared.userData.shared = true;
+        foliageUnderShared.emissiveIntensity = 0.12;
+        foliageUnderShared.opacity = 0.88;
+        foliageUnderShared.color = foliageUnderShared.color.clone().multiplyScalar(0.55);
+      }
+
       function plantMat(col, eCol, eInt, rough, opac) {
+        // Cap emissive so plants sculpt under light (not neon balloons)
+        const ei = Math.min(eInt != null ? eInt : 0.35, 0.55);
         return mkMat(col, {
           emissive: eCol,
-          emissiveIntensity: eInt != null ? eInt : 0.6,
+          emissiveIntensity: ei,
           roughness: rough != null ? rough : 0.55,
           metalness: isCrystal ? 0.25 : 0.08,
           opacity: opac != null ? opac : 0.95,
@@ -1418,9 +2038,20 @@
         });
       }
 
+      function barkMat() {
+        if (barkMatShared) return barkMatShared;
+        return plantMat(isEmber ? 0x3b1c0a : isCrystal ? 0x2e1065 : isWhisper ? 0x1e1b4b : 0x2d1b0e, plantEm, 0.12, 0.92);
+      }
+
+      function leafMat(under) {
+        if (under && foliageUnderShared) return foliageUnderShared;
+        if (!under && foliageMatShared) return foliageMatShared;
+        return plantMat(plantCol, plantEm, under ? 0.15 : 0.28, 0.65);
+      }
+
       function addSway(mesh, amount) {
         mesh.userData.swayAmt = amount || 0.04;
-        mesh.userData.swayPhase = seed + mesh.id * 0.1;
+        mesh.userData.swayPhase = seed + mesh.id * 0.1 + Math.random() * 2;
         swayParts.push(mesh);
       }
 
@@ -1429,11 +2060,83 @@
         fn(pg, scale);
         pg.position.set(cx, 0, cz);
         pg.rotation.y = noise2(cx + seed, cz) * Math.PI * 2;
-        // Lean
-        pg.rotation.z = (noise2(cz, seed) - 0.5) * 0.25;
-        pg.rotation.x = (noise2(seed, cx) - 0.5) * 0.18;
+        // Asymmetric lean (nature isn't radial-perfect)
+        pg.rotation.z = (noise2(cz, seed) - 0.5) * 0.32;
+        pg.rotation.x = (noise2(seed, cx) - 0.5) * 0.22;
         group.add(pg);
         return pg;
+      }
+
+      /** Root flare + 3–6 buried cones into ground */
+      function addRoots(pg, s, trunkR) {
+        const base = new THREE.Mesh(
+          new THREE.CylinderGeometry(trunkR * 1.35, trunkR * 1.85, 0.22 * s, 8),
+          barkMat()
+        );
+        base.position.y = 0.08 * s;
+        base.castShadow = true;
+        pg.add(base);
+        const n = 3 + Math.floor(Math.random() * 4);
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2 + seed * 0.3;
+          const root = new THREE.Mesh(
+            new THREE.ConeGeometry(0.08 * s + trunkR * 0.35, 0.55 * s + trunkR, 5),
+            barkMat()
+          );
+          root.position.set(Math.cos(a) * trunkR * 1.1, 0.06 * s, Math.sin(a) * trunkR * 1.1);
+          root.rotation.z = Math.cos(a) * 1.15;
+          root.rotation.x = Math.sin(a) * 1.15;
+          root.castShadow = true;
+          pg.add(root);
+        }
+      }
+
+      /** Tapered multi-segment trunk */
+      function addTrunk(pg, s, trunkH, rBot, rTop, segs) {
+        segs = segs || 3;
+        let y = 0;
+        for (let i = 0; i < segs; i++) {
+          const t0 = i / segs;
+          const t1 = (i + 1) / segs;
+          const r0 = rBot + (rTop - rBot) * t0;
+          const r1 = rBot + (rTop - rBot) * t1;
+          const h = trunkH / segs;
+          const seg = new THREE.Mesh(
+            new THREE.CylinderGeometry(r1, r0, h, isWhisper ? 7 : 8),
+            barkMat()
+          );
+          seg.position.y = y + h * 0.5;
+          // Slight crook per segment
+          seg.rotation.z = (noise2(seed + i, i) - 0.5) * 0.08;
+          seg.rotation.x = (noise2(i, seed) - 0.5) * 0.06;
+          seg.castShadow = true;
+          pg.add(seg);
+          y += h * 0.98;
+        }
+        return trunkH;
+      }
+
+      /** Small foliage lobe cluster */
+      function addLeafCluster(pg, x, y, z, s, sway) {
+        const n = 3 + Math.floor(Math.random() * 4);
+        for (let i = 0; i < n; i++) {
+          const r = (0.18 + Math.random() * 0.28) * s;
+          const lobe = new THREE.Mesh(
+            Math.random() > 0.45
+              ? new THREE.IcosahedronGeometry(r, 0)
+              : new THREE.SphereGeometry(r, 7, 6),
+            leafMat(i === 0)
+          );
+          lobe.position.set(
+            x + (Math.random() - 0.5) * 0.35 * s,
+            y + (Math.random() - 0.5) * 0.28 * s,
+            z + (Math.random() - 0.5) * 0.35 * s
+          );
+          lobe.scale.set(1.05 + Math.random() * 0.35, 0.65 + Math.random() * 0.35, 1.05 + Math.random() * 0.35);
+          lobe.castShadow = true;
+          pg.add(lobe);
+          if (sway) addSway(lobe, sway);
+        }
       }
 
       // --- plant builders ---
@@ -1597,190 +2300,258 @@
         }
       }
 
+      /** Alien canopy — umbrella silhouette, multi-cluster top */
       function buildCanopy(pg, s) {
-        const trunkH = (1.6 + density) * s;
-        const trunk = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.08 * s, 0.14 * s, trunkH, 7),
-          plantMat(isCrystal ? 0x4c1d95 : 0x3d2b1f, plantEm, 0.25, 0.9)
-        );
-        trunk.position.y = trunkH * 0.5;
-        trunk.castShadow = true;
-        pg.add(trunk);
-        const layers = 2 + Math.floor(density * 2);
-        for (let i = 0; i < layers; i++) {
-          const crown = new THREE.Mesh(
-            new THREE.IcosahedronGeometry((0.55 + i * 0.15) * s, 0),
-            plantMat(plantCol, plantEm, 0.85 + density * 0.3, 0.45)
+        const trunkH = (1.8 + density * 0.9) * s * (isWhisper ? 1.25 : 1);
+        const rBot = 0.16 * s;
+        addRoots(pg, s, rBot);
+        addTrunk(pg, s, trunkH, rBot, 0.07 * s, 3);
+        // Horizontal arms then cloudlets
+        const arms = 5 + Math.floor(density * 2);
+        for (let i = 0; i < arms; i++) {
+          const a = (i / arms) * Math.PI * 2 + seed;
+          const armLen = (0.7 + Math.random() * 0.45) * s;
+          const arm = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.04 * s, armLen, 3, 5),
+            barkMat()
           );
-          crown.position.y = trunkH * 0.75 + i * 0.4 * s;
-          crown.scale.set(1.1 - i * 0.12, 0.65, 1.1 - i * 0.12);
-          crown.castShadow = true;
-          pg.add(crown);
-          addSway(crown, 0.03);
+          arm.position.set(Math.cos(a) * 0.12 * s, trunkH * 0.92, Math.sin(a) * 0.12 * s);
+          arm.rotation.z = Math.cos(a) * 1.25;
+          arm.rotation.x = Math.sin(a) * 1.25;
+          pg.add(arm);
+          const tipX = Math.cos(a) * armLen * 0.85;
+          const tipZ = Math.sin(a) * armLen * 0.85;
+          addLeafCluster(pg, tipX, trunkH * 0.95 + Math.random() * 0.25 * s, tipZ, s * 0.85, 0.035);
         }
-        const halo = new THREE.Mesh(
-          new THREE.SphereGeometry(0.9 * s, 10, 10),
-          plantMat(accent, em, 0.6, 0.2, 0.22)
-        );
-        halo.position.y = trunkH + 0.3 * s;
-        pg.add(halo);
-      }
-
-      /** Beautiful mid-size world tree */
-      function buildTree(pg, s) {
-        const trunkH = (2.8 + density * 1.4) * s;
-        const trunk = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.12 * s, 0.22 * s, trunkH, 8),
-          plantMat(isEmber ? 0x3b1c0a : isCrystal ? 0x2e1065 : 0x2d1b0e, plantEm, 0.2, 0.92)
-        );
-        trunk.position.y = trunkH * 0.5;
-        trunk.castShadow = true;
-        pg.add(trunk);
-        // Root flare
-        const roots = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.28 * s, 0.38 * s, 0.25 * s, 8),
-          plantMat(isEmber ? 0x3b1c0a : 0x2d1b0e, plantEm, 0.15, 0.95)
-        );
-        roots.position.y = 0.1 * s;
-        pg.add(roots);
-        // Layered canopy lobes
-        const lobes = 4 + Math.floor(density * 3);
-        for (let i = 0; i < lobes; i++) {
-          const a = (i / lobes) * Math.PI * 2 + seed;
-          const rr = (0.45 + Math.random() * 0.35) * s;
-          const crown = new THREE.Mesh(
-            new THREE.IcosahedronGeometry((0.7 + Math.random() * 0.35) * s, 0),
-            plantMat(plantCol, plantEm, 0.7 + density * 0.4, 0.5)
-          );
-          crown.position.set(
+        // Central dome of small clusters (not one mega balloon)
+        for (let i = 0; i < 8 + Math.floor(density * 4); i++) {
+          const a = Math.random() * Math.PI * 2;
+          const rr = Math.random() * 0.7 * s;
+          addLeafCluster(
+            pg,
             Math.cos(a) * rr,
-            trunkH * 0.85 + (Math.random() - 0.3) * 0.5 * s,
-            Math.sin(a) * rr
+            trunkH + 0.15 * s + Math.random() * 0.4 * s,
+            Math.sin(a) * rr,
+            s * (0.55 + Math.random() * 0.35),
+            0.03
           );
-          crown.scale.set(1.15, 0.75 + Math.random() * 0.3, 1.15);
-          crown.castShadow = true;
-          pg.add(crown);
-          addSway(crown, 0.025);
         }
-        // Apex crown
-        const apex = new THREE.Mesh(
-          new THREE.SphereGeometry(0.85 * s, 12, 10),
-          plantMat(plantCol, plantEm, 0.95, 0.4)
-        );
-        apex.position.y = trunkH + 0.35 * s;
-        apex.scale.set(1.2, 0.7, 1.2);
-        apex.castShadow = true;
-        pg.add(apex);
-        // Soft biolum under-canopy
+        // Soft under-glow only (low opacity)
         const under = new THREE.Mesh(
-          new THREE.SphereGeometry(1.1 * s, 12, 10),
-          plantMat(accent, em, 0.55, 0.2, 0.18)
+          new THREE.SphereGeometry(0.95 * s, 10, 8),
+          plantMat(accent, em, 0.35, 0.25, 0.14)
         );
-        under.position.y = trunkH * 0.9;
+        under.position.y = trunkH * 0.95;
+        under.scale.set(1.15, 0.45, 1.15);
         pg.add(under);
       }
 
-      /** Huge landmark tree — sparse, beautiful */
-      function buildMegaTree(pg, s) {
-        const trunkH = (5.5 + density * 2.5) * s;
-        const trunk = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.28 * s, 0.55 * s, trunkH, 10),
-          plantMat(isCrystal ? 0x3b0764 : 0x1c1008, plantEm, 0.18, 0.95)
-        );
-        trunk.position.y = trunkH * 0.5;
-        trunk.castShadow = true;
-        pg.add(trunk);
-        // Branch arms
-        for (let i = 0; i < 5; i++) {
-          const a = (i / 5) * Math.PI * 2;
+      /**
+       * Mid-size world tree — roots, segmented trunk, branches, multi-cluster canopy.
+       * Biome silhouettes: Whisper tall thin · Ember scorched sparse · Crystal crystal fans · default umbrella.
+       */
+      function buildTree(pg, s) {
+        const tall = isWhisper ? 1.35 : isEmber ? 0.9 : 1;
+        const trunkH = (3.0 + density * 1.5) * s * tall;
+        const rBot = (isWhisper ? 0.1 : 0.16) * s;
+        const rTop = (isWhisper ? 0.05 : 0.08) * s;
+        addRoots(pg, s, rBot);
+        addTrunk(pg, s, trunkH, rBot, rTop, isWhisper ? 4 : 3);
+
+        // Branch tier
+        const nBranch = isEmber ? 3 + Math.floor(density) : isWhisper ? 5 + Math.floor(density * 2) : 5 + Math.floor(density * 3);
+        for (let i = 0; i < nBranch; i++) {
+          const a = (i / nBranch) * Math.PI * 2 + seed * 0.7 + (Math.random() - 0.5) * 0.4;
+          const elev = trunkH * (0.45 + (i / nBranch) * 0.45);
+          const armLen = (isEmber ? 0.55 : 0.85 + Math.random() * 0.5) * s;
           const arm = new THREE.Mesh(
-            new THREE.CapsuleGeometry(0.08 * s, 1.4 * s, 4, 6),
-            plantMat(isCrystal ? 0x4c1d95 : 0x2d1b0e, plantEm, 0.2, 0.9)
+            new THREE.CapsuleGeometry((isWhisper ? 0.035 : 0.05) * s, armLen, 3, 5),
+            barkMat()
           );
-          arm.position.set(
-            Math.cos(a) * 0.35 * s,
-            trunkH * (0.55 + i * 0.06),
-            Math.sin(a) * 0.35 * s
-          );
-          arm.rotation.z = Math.cos(a) * 0.9;
-          arm.rotation.x = Math.sin(a) * 0.9;
+          const lean = isEmber ? 0.55 : 0.95;
+          arm.position.set(Math.cos(a) * rBot * 0.6, elev, Math.sin(a) * rBot * 0.6);
+          arm.rotation.z = Math.cos(a) * lean;
+          arm.rotation.x = Math.sin(a) * lean;
+          arm.rotation.y = (Math.random() - 0.5) * 0.4;
+          arm.castShadow = true;
           pg.add(arm);
-          const blob = new THREE.Mesh(
-            new THREE.IcosahedronGeometry((1.1 + Math.random() * 0.4) * s, 0),
-            plantMat(plantCol, plantEm, 0.9, 0.42)
-          );
-          blob.position.set(
-            Math.cos(a) * 1.6 * s,
-            trunkH * 0.75 + Math.sin(i) * 0.4 * s,
-            Math.sin(a) * 1.6 * s
-          );
-          blob.scale.set(1.3, 0.7, 1.3);
-          blob.castShadow = true;
-          pg.add(blob);
-          addSway(blob, 0.02);
+          // Secondary twig
+          if (!isEmber && Math.random() < 0.65) {
+            const tw = new THREE.Mesh(
+              new THREE.CapsuleGeometry(0.025 * s, armLen * 0.45, 3, 4),
+              barkMat()
+            );
+            tw.position.set(
+              Math.cos(a) * armLen * 0.55,
+              elev + 0.15 * s,
+              Math.sin(a) * armLen * 0.55
+            );
+            tw.rotation.z = Math.cos(a + 0.5) * 1.1;
+            tw.rotation.x = Math.sin(a + 0.5) * 1.1;
+            pg.add(tw);
+          }
+          const tipX = Math.cos(a) * armLen * 0.9;
+          const tipZ = Math.sin(a) * armLen * 0.9;
+          const tipY = elev + Math.sin(lean) * armLen * 0.35;
+          if (isCrystal && Math.random() < 0.45) {
+            // Crystal fan instead of soft leaf
+            for (let k = 0; k < 3; k++) {
+              const cryst = new THREE.Mesh(
+                new THREE.ConeGeometry(0.1 * s, 0.45 * s, 5),
+                plantMat(accent, em, 0.55, 0.22, 0.9)
+              );
+              cryst.position.set(tipX + (k - 1) * 0.12 * s, tipY + k * 0.1 * s, tipZ);
+              cryst.rotation.z = (k - 1) * 0.35;
+              cryst.castShadow = true;
+              pg.add(cryst);
+            }
+          } else if (isEmber) {
+            // Sparse scorched wisps
+            addLeafCluster(pg, tipX, tipY, tipZ, s * 0.55, 0.02);
+          } else {
+            addLeafCluster(pg, tipX, tipY, tipZ, s * (0.75 + Math.random() * 0.35), 0.028);
+            if (Math.random() < 0.5) {
+              addLeafCluster(pg, tipX * 0.7, tipY + 0.2 * s, tipZ * 0.7, s * 0.5, 0.03);
+            }
+          }
         }
-        // Giant crown cloud
-        const mega = new THREE.Mesh(
-          new THREE.SphereGeometry(2.2 * s, 14, 12),
-          plantMat(plantCol, plantEm, 0.75, 0.4)
-        );
-        mega.position.y = trunkH + 0.6 * s;
-        mega.scale.set(1.4, 0.65, 1.4);
-        mega.castShadow = true;
-        pg.add(mega);
+
+        // Apex fill clusters (cloudlets, not one sphere)
+        const apexN = isEmber ? 4 : isWhisper ? 10 : 8 + Math.floor(density * 4);
+        for (let i = 0; i < apexN; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const rr = Math.random() * (isWhisper ? 0.55 : 0.85) * s;
+          addLeafCluster(
+            pg,
+            Math.cos(a) * rr,
+            trunkH * (0.9 + Math.random() * 0.2) + Math.random() * 0.35 * s,
+            Math.sin(a) * rr,
+            s * (0.45 + Math.random() * 0.4),
+            0.025
+          );
+        }
+
+        // Optional fruit / crystal tip glow (not full canopy emissive)
+        if (density > 0.4 && Math.random() < 0.5) {
+          for (let i = 0; i < 2 + Math.floor(density * 2); i++) {
+            const fruit = new THREE.Mesh(
+              new THREE.OctahedronGeometry(0.1 * s, 0),
+              plantMat(isEmber ? 0xf97316 : 0xfbbf24, isEmber ? 0xea580c : 0xf59e0b, 0.7, 0.2)
+            );
+            fruit.position.set(
+              (Math.random() - 0.5) * 1.2 * s,
+              trunkH * 0.75 + Math.random() * 0.6 * s,
+              (Math.random() - 0.5) * 1.2 * s
+            );
+            pg.add(fruit);
+          }
+        }
+      }
+
+      /** Landmark mega tree — full branch architecture + fruit + soft halo */
+      function buildMegaTree(pg, s) {
+        const trunkH = (5.8 + density * 2.8) * s * (isWhisper ? 1.2 : 1);
+        const rBot = 0.42 * s;
+        addRoots(pg, s * 1.15, rBot);
+        addTrunk(pg, s, trunkH, rBot, 0.16 * s, 5);
+
+        const nBranch = 7 + Math.floor(density * 3);
+        for (let i = 0; i < nBranch; i++) {
+          const a = (i / nBranch) * Math.PI * 2 + seed;
+          const elev = trunkH * (0.4 + (i / nBranch) * 0.5);
+          const armLen = (1.3 + Math.random() * 0.9) * s;
+          const arm = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.07 * s, armLen, 4, 6),
+            barkMat()
+          );
+          arm.position.set(Math.cos(a) * rBot * 0.5, elev, Math.sin(a) * rBot * 0.5);
+          arm.rotation.z = Math.cos(a) * 1.05;
+          arm.rotation.x = Math.sin(a) * 1.05;
+          arm.castShadow = true;
+          pg.add(arm);
+          // Fork
+          const fork = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.04 * s, armLen * 0.55, 3, 5),
+            barkMat()
+          );
+          fork.position.set(
+            Math.cos(a + 0.3) * armLen * 0.55,
+            elev + 0.25 * s,
+            Math.sin(a + 0.3) * armLen * 0.55
+          );
+          fork.rotation.z = Math.cos(a + 0.8) * 1.2;
+          fork.rotation.x = Math.sin(a + 0.8) * 1.2;
+          pg.add(fork);
+          addLeafCluster(pg, Math.cos(a) * armLen * 0.95, elev + 0.3 * s, Math.sin(a) * armLen * 0.95, s * 1.1, 0.02);
+          addLeafCluster(pg, Math.cos(a + 0.3) * armLen * 0.75, elev + 0.55 * s, Math.sin(a + 0.3) * armLen * 0.75, s * 0.85, 0.022);
+        }
+
+        // Crown cloudlets
+        for (let i = 0; i < 16 + Math.floor(density * 6); i++) {
+          const a = Math.random() * Math.PI * 2;
+          const rr = Math.random() * 1.8 * s;
+          addLeafCluster(
+            pg,
+            Math.cos(a) * rr,
+            trunkH + Math.random() * 1.2 * s,
+            Math.sin(a) * rr,
+            s * (0.7 + Math.random() * 0.55),
+            0.018
+          );
+        }
+
         // Resonance fruit
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < 5; i++) {
           const fruit = new THREE.Mesh(
-            new THREE.OctahedronGeometry(0.18 * s, 0),
-            plantMat(0xfbbf24, 0xf59e0b, 1.4, 0.2)
+            new THREE.OctahedronGeometry(0.16 * s, 0),
+            plantMat(0xfbbf24, 0xf59e0b, 0.75, 0.2)
           );
           fruit.position.set(
-            (Math.random() - 0.5) * 2 * s,
-            trunkH * 0.7 + Math.random() * s,
-            (Math.random() - 0.5) * 2 * s
+            (Math.random() - 0.5) * 2.2 * s,
+            trunkH * 0.65 + Math.random() * 1.2 * s,
+            (Math.random() - 0.5) * 2.2 * s
           );
           pg.add(fruit);
         }
+        // Thin halo (mega only)
         const halo = new THREE.Mesh(
-          new THREE.SphereGeometry(2.8 * s, 14, 12),
-          plantMat(accent, em, 0.45, 0.15, 0.12)
+          new THREE.SphereGeometry(2.6 * s, 12, 10),
+          plantMat(accent, em, 0.28, 0.2, 0.1)
         );
-        halo.position.y = trunkH + 0.4 * s;
+        halo.position.y = trunkH + 0.5 * s;
+        halo.scale.set(1.3, 0.55, 1.3);
         pg.add(halo);
       }
 
-      /** Crystal / ice spire tree */
+      /** Crystal / ice / ember spire — fan of shards on a thin trunk */
       function buildSpire(pg, s) {
-        const h = (3.2 + density * 2) * s;
-        const trunk = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.06 * s, 0.16 * s, h * 0.55, 6),
-          plantMat(isEmber ? 0x7c2d12 : 0x334155, plantEm, 0.35, 0.5)
-        );
-        trunk.position.y = h * 0.28;
-        trunk.castShadow = true;
-        pg.add(trunk);
-        for (let i = 0; i < 5; i++) {
+        const h = (3.4 + density * 2.2) * s;
+        addRoots(pg, s * 0.7, 0.12 * s);
+        addTrunk(pg, s, h * 0.5, 0.14 * s, 0.05 * s, 2);
+        const shards = 6 + Math.floor(density * 3);
+        for (let i = 0; i < shards; i++) {
           const cryst = new THREE.Mesh(
-            new THREE.ConeGeometry((0.35 - i * 0.04) * s, (1.1 - i * 0.12) * s, 5),
-            plantMat(accent, em, 1.1 + i * 0.1, 0.2)
+            new THREE.ConeGeometry((0.28 - i * 0.02) * s, (0.9 + Math.random() * 0.5) * s, 5),
+            plantMat(accent, em, 0.5 + i * 0.04, 0.18, 0.92)
           );
+          const a = (i / shards) * Math.PI * 2 + seed;
           cryst.position.set(
-            (Math.random() - 0.5) * 0.4 * s,
-            h * 0.45 + i * 0.35 * s,
-            (Math.random() - 0.5) * 0.4 * s
+            Math.cos(a) * 0.15 * s,
+            h * 0.4 + i * 0.12 * s + Math.random() * 0.15 * s,
+            Math.sin(a) * 0.15 * s
           );
-          cryst.rotation.z = (Math.random() - 0.5) * 0.35;
-          cryst.rotation.x = (Math.random() - 0.5) * 0.25;
+          cryst.rotation.z = Math.cos(a) * 0.45;
+          cryst.rotation.x = Math.sin(a) * 0.45;
           cryst.castShadow = true;
           pg.add(cryst);
         }
         const tip = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.28 * s, 0),
-          plantMat(0xe0f2fe, em, 1.6, 0.15)
+          new THREE.OctahedronGeometry(0.26 * s, 0),
+          plantMat(0xe0f2fe, em, 0.7, 0.15)
         );
         tip.position.y = h * 0.95;
         pg.add(tip);
-        addSway(pg, 0.02);
+        addSway(pg, 0.015);
       }
 
       function buildCluster(pg, s) {
@@ -1802,6 +2573,194 @@
           sub.rotation.y = st * 6;
           pg.add(sub);
         }
+      }
+
+      /**
+       * Full multi-layer forest system — ground · mid · canopy · optional mega.
+       * Biome variants change mix; corridor keeps a sprint path through the grove.
+       */
+      function buildForestSystem() {
+        const kit = opts.sceneKit || sceneKit(density, biomeId);
+        const R = kit.forestRadius || 14 + density * 12;
+        const corridor = kit.corridor != null ? kit.corridor : 3.2;
+        // Local corridor along +Z (spawner sets mesh.rotation.y = run yaw)
+        // slight noise so path isn't laser-straight through every grove
+        const pathAng = (noise2(seed, seed * 0.3) - 0.5) * 0.18;
+        const cPath = Math.cos(pathAng);
+        const sPath = Math.sin(pathAng);
+
+        function inCorridor(lx, lz) {
+          // Distance to path axis (line along rotated Z)
+          const side = -sPath * lx + cPath * lz;
+          return Math.abs(side) < corridor * (0.85 + noise2(lx, lz) * 0.25);
+        }
+
+        function ringPos(i, salt, radMul) {
+          const nA = noise2(seed + i * 0.41 + salt, seed * 0.17);
+          const nR = noise2(i * 0.63 + salt, seed + 4);
+          const ang = nA * Math.PI * 2;
+          const rad = Math.sqrt(0.08 + nR * 0.92) * R * (radMul != null ? radMul : 1);
+          return {
+            x: Math.cos(ang) * rad,
+            z: Math.sin(ang) * rad,
+            nA: nA,
+            nR: nR,
+          };
+        }
+
+        // --- Ground cover layer ---
+        const nGround = kit.groundCount || 8;
+        for (let i = 0; i < nGround; i++) {
+          const p = ringPos(i, 1.1, 1.05);
+          if (inCorridor(p.x, p.z) && p.nR < 0.85) continue; // keep path clear
+          // Density falloff at edge + natural gaps
+          if (p.nR < 0.12 && Math.random() < 0.4) continue;
+          let sc = 0.45 + p.nA * 0.55 + density * 0.2;
+          let builder = buildFlower;
+          if (isEmber) {
+            builder = p.nA < 0.4 ? buildBush : p.nA < 0.7 ? buildStalk : buildFlower;
+            sc *= 0.9;
+          } else if (isWhisper) {
+            builder = p.nA < 0.35 ? buildFloater : p.nA < 0.65 ? buildStalk : buildFlower;
+            sc *= 0.85;
+          } else if (biomeId === "frostGlacier") {
+            builder = p.nA < 0.5 ? buildStalk : buildFlower;
+            sc *= 0.75;
+          } else if (biomeId === "rosePulse") {
+            builder = p.nA < 0.55 ? buildFlower : buildBush;
+          } else if (biomeId === "jadeCanopy") {
+            builder = p.nA < 0.4 ? buildBush : p.nA < 0.75 ? buildFlower : buildStalk;
+          } else if (biomeId === "solarGold") {
+            builder = p.nA < 0.45 ? buildBush : buildFlower;
+          } else {
+            // Crystal — glowing floor
+            builder = p.nA < 0.35 ? buildFlower : p.nA < 0.7 ? buildStalk : buildBush;
+          }
+          placePlant(builder, p.x, p.z, sc);
+        }
+
+        // --- Mid layer (bushes, vines, understory) ---
+        const nMid = kit.midCount || 6;
+        for (let i = 0; i < nMid; i++) {
+          const p = ringPos(i, 2.7, 0.95);
+          if (inCorridor(p.x, p.z)) continue;
+          if (p.nR < 0.15) continue;
+          let sc = 0.55 + p.nR * 0.5 + density * 0.25;
+          let builder = buildBush;
+          if (isEmber) {
+            builder = p.nA < 0.55 ? buildBush : buildVine;
+          } else if (isWhisper) {
+            builder = p.nA < 0.4 ? buildVine : p.nA < 0.75 ? buildFloater : buildBush;
+            sc *= 1.05;
+          } else if (biomeId === "jadeCanopy") {
+            builder = p.nA < 0.5 ? buildBush : buildVine;
+            sc *= 1.1;
+          } else if (biomeId === "rosePulse") {
+            builder = p.nA < 0.45 ? buildVine : buildBush;
+          } else if (biomeId === "frostGlacier") {
+            builder = buildStalk;
+            sc *= 0.8;
+          } else if (isCrystal) {
+            builder = p.nA < 0.35 ? buildVine : p.nA < 0.7 ? buildBush : buildCluster;
+          } else {
+            builder = p.nA < 0.5 ? buildBush : buildCluster;
+          }
+          placePlant(builder, p.x, p.z, sc);
+        }
+
+        // --- Canopy layer (trees / spires / canopy crowns) ---
+        const nCanopy = kit.canopyCount || 5;
+        for (let i = 0; i < nCanopy; i++) {
+          const p = ringPos(i, 5.3, 0.88);
+          if (inCorridor(p.x, p.z) && p.nR < 0.75) continue;
+          // Outer ring prefers taller trees
+          let sc = 0.75 + p.nR * 0.55 + density * 0.35;
+          let builder = buildTree;
+          if (isEmber) {
+            builder = p.nA < 0.55 ? buildTree : buildSpire;
+            sc *= 0.92;
+          } else if (isWhisper) {
+            builder = p.nA < 0.4 ? buildCanopy : p.nA < 0.75 ? buildTree : buildFloater;
+            sc *= 1.15;
+          } else if (biomeId === "jadeCanopy") {
+            builder = p.nA < 0.35 ? buildMegaTree : p.nA < 0.7 ? buildTree : buildCanopy;
+            sc *= 1.2;
+          } else if (biomeId === "frostGlacier") {
+            builder = buildSpire;
+            sc *= 1.05;
+          } else if (biomeId === "solarGold") {
+            builder = p.nA < 0.6 ? buildTree : buildCanopy;
+          } else if (biomeId === "rosePulse") {
+            builder = p.nA < 0.45 ? buildCanopy : buildTree;
+          } else if (isCrystal) {
+            builder = p.nA < 0.3 ? buildSpire : p.nA < 0.65 ? buildTree : buildCanopy;
+            sc *= 1.08;
+          }
+          placePlant(builder, p.x, p.z, sc);
+        }
+
+        // --- Landmark mega tree (high / very-high) ---
+        if (Math.random() < (kit.megaChance || 0)) {
+          const p = ringPos(99, 9.1, 0.55);
+          if (!inCorridor(p.x, p.z)) {
+            const megaBuilder =
+              biomeId === "frostGlacier"
+                ? buildSpire
+                : biomeId === "whisperStars"
+                  ? buildCanopy
+                  : buildMegaTree;
+            placePlant(megaBuilder, p.x * 0.7, p.z * 0.7, 1.15 + density * 0.35);
+          }
+        }
+
+        // --- Air layer: floaters / spores inside canopy volume ---
+        const airN = Math.floor(
+          (isWhisper ? 6 : isCrystal ? 5 : 3) + density * 4
+        );
+        for (let i = 0; i < airN; i++) {
+          const p = ringPos(i, 11.0, 0.7);
+          if (inCorridor(p.x, p.z)) continue;
+          placePlant(buildFloater, p.x, p.z, 0.5 + Math.random() * 0.4);
+        }
+
+        // Soft ground-glow discs along corridor (path invitation)
+        if (density > 0.45) {
+          const glows = 3 + Math.floor(density * 3);
+          for (let i = 0; i < glows; i++) {
+            const t = (i / glows - 0.5) * R * 1.4;
+            const gx = sPath * t;
+            const gz = cPath * t;
+            const disc = new THREE.Mesh(
+              new THREE.CircleGeometry(0.55 + density * 0.35, 10),
+              plantMat(accent, em, 0.55, 0.2, 0.22)
+            );
+            disc.rotation.x = -Math.PI / 2;
+            disc.position.set(gx, 0.04, gz);
+            group.add(disc);
+          }
+        }
+
+        // Resonance jewel at forest heart
+        if ((opts.resonance || 0) > 0.35 && density > 0.5) {
+          const jewel = new THREE.Mesh(
+            new THREE.OctahedronGeometry(0.35 + density * 0.15, 0),
+            plantMat(0xfbbf24, 0xf59e0b, 1.4, 0.15)
+          );
+          jewel.position.set(0, 0.6 + density * 0.4, 0);
+          group.add(jewel);
+        }
+      }
+
+      // ----- Forest system path (high / very-high scene kits) -----
+      if (type.id === "forest") {
+        buildForestSystem();
+        group.userData.kind = "vegetation";
+        group.userData.vegType = "forest";
+        group.userData.forest = true;
+        group.userData.swayParts = swayParts;
+        group.userData.swayT = 0;
+        group.userData.sceneBand = (opts.sceneKit && opts.sceneKit.band) || densityBand(density).id;
+        return;
       }
 
       // How many "instances" in this vegetation entity
@@ -1918,7 +2877,7 @@
       if (r < 0.9) return RUIN_TYPES.outpost;
       return RUIN_TYPES.tower;
     }
-    // Crystal Nebula
+    // Crystal Nebula + other surface biomes
     if (r < 0.22) return RUIN_TYPES.arch;
     if (r < 0.42) return RUIN_TYPES.outpost;
     if (r < 0.58) return RUIN_TYPES.monolith;
@@ -1926,6 +2885,58 @@
     if (r < 0.85) return RUIN_TYPES.platform;
     if (density > 0.5) return RUIN_TYPES.temple;
     return RUIN_TYPES.outpost;
+  }
+
+  /**
+   * Ruins nested in a forest footprint — biome-flavored "grove complex" pieces.
+   * High templeChance → Crystal Forest Ruin temples at the canopy edge.
+   */
+  function pickGroveRuinType(density, biomeId, resonance, kit) {
+    const r = Math.random();
+    const res = resonance || 0;
+    const templeP =
+      (kit && kit.groveTempleChance != null ? kit.groveTempleChance : 0.4) +
+      res * 0.15 +
+      Math.max(0, density - 0.5) * 0.2;
+
+    if (r < templeP) return RUIN_TYPES.temple;
+
+    if (biomeId === "crystalNebula") {
+      if (r < 0.55) return RUIN_TYPES.arch;
+      if (r < 0.75) return RUIN_TYPES.monolith;
+      return RUIN_TYPES.tower;
+    }
+    if (biomeId === "emberVoid") {
+      if (r < 0.5) return RUIN_TYPES.wreck;
+      if (r < 0.75) return RUIN_TYPES.tower;
+      return RUIN_TYPES.outpost;
+    }
+    if (biomeId === "whisperStars") {
+      if (r < 0.5) return RUIN_TYPES.monolith;
+      if (r < 0.75) return RUIN_TYPES.platform;
+      return RUIN_TYPES.arch;
+    }
+    if (biomeId === "jadeCanopy") {
+      if (r < 0.55) return RUIN_TYPES.outpost;
+      if (r < 0.8) return RUIN_TYPES.arch;
+      return RUIN_TYPES.temple;
+    }
+    if (biomeId === "frostGlacier") {
+      if (r < 0.5) return RUIN_TYPES.monolith;
+      if (r < 0.75) return RUIN_TYPES.tower;
+      return RUIN_TYPES.arch;
+    }
+    if (biomeId === "solarGold") {
+      if (r < 0.5) return RUIN_TYPES.outpost;
+      if (r < 0.75) return RUIN_TYPES.arch;
+      return RUIN_TYPES.temple;
+    }
+    if (biomeId === "rosePulse") {
+      if (r < 0.5) return RUIN_TYPES.arch;
+      if (r < 0.75) return RUIN_TYPES.outpost;
+      return RUIN_TYPES.temple;
+    }
+    return pickRuinType(density, biomeId, resonance);
   }
 
   function createRuinMesh() {
@@ -1940,8 +2951,10 @@
         const c = group.children.pop();
         if (c.geometry) c.geometry.dispose();
         if (c.material) {
-          if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
-          else c.material.dispose();
+          const mats = Array.isArray(c.material) ? c.material : [c.material];
+          mats.forEach(function (m) {
+            if (m && !m.userData.shared) m.dispose();
+          });
         }
       }
 
@@ -1967,117 +2980,267 @@
       const S = 2.6 + density * 0.9 + (type.id === "temple" ? 1.1 : type.id === "monolith" ? 0.6 : 0);
       const pulseParts = [];
       let hasLoot = false;
+      const biomeIdR = biome.id || "crystalNebula";
+
+      // Tier C stone material (textured) + rune strips only
+      let stoneShared = null;
+      if (global.BoltGraphics && global.BoltGraphics.makeRuinStoneMaterial) {
+        stoneShared = global.BoltGraphics.makeRuinStoneMaterial(biomeIdR);
+        stoneShared.userData.shared = true;
+      }
 
       function stoneMat(extraEm) {
+        if (stoneShared && !extraEm) return stoneShared;
+        if (stoneShared && extraEm) {
+          const m = stoneShared.clone();
+          m.emissive = new THREE.Color(em);
+          m.emissiveIntensity = 0.22;
+          return m;
+        }
         return mkMat(ruinCol, {
           metalness: isCrystal ? 0.35 : isEmber ? 0.15 : 0.28,
           roughness: isEmber ? 0.92 : isWhisper ? 0.78 : 0.55,
           flat: isEmber,
           emissive: extraEm ? em : isWhisper ? 0x1e1b4b : 0x0f172a,
-          emissiveIntensity: extraEm ? 0.35 : isWhisper ? 0.12 : 0.08,
+          emissiveIntensity: extraEm ? 0.28 : isWhisper ? 0.1 : 0.06,
         });
       }
       function runeMat() {
+        // Thin bright strips — not full-wall neon
         return mkMat(accent, {
           emissive: em,
-          emissiveIntensity: 0.85 + resonance * 0.6,
-          metalness: 0.5,
-          roughness: 0.3,
-          opacity: 0.9,
+          emissiveIntensity: 0.55 + resonance * 0.4,
+          metalness: 0.55,
+          roughness: 0.28,
+          opacity: 0.92,
         });
       }
       function goldMat() {
         return mkMat(0xfbbf24, {
           emissive: 0xf59e0b,
-          emissiveIntensity: 1.3 + resonance * 0.5,
+          emissiveIntensity: 0.85 + resonance * 0.4,
           metalness: 0.7,
           roughness: 0.18,
         });
       }
 
-      function addPillar(x, z, h, lean) {
-        const thick = (0.55 + Math.random() * 0.25) * S * 0.45;
-        const p = new THREE.Mesh(
-          new THREE.BoxGeometry(thick, h, thick * 0.95),
-          stoneMat(isCrystal && Math.random() < 0.3)
+      // ----- Kit pieces (tier B) -----
+      function addColumn(x, z, h, lean) {
+        const thick = (0.48 + Math.random() * 0.2) * S * 0.42;
+        // Base plinth
+        const base = new THREE.Mesh(
+          new THREE.BoxGeometry(thick * 1.45, 0.28 * S * 0.3, thick * 1.45),
+          stoneMat(false)
         );
-        p.position.set(x, h * 0.5, z);
-        p.rotation.z = lean || (noise2(x + seed, z) - 0.5) * (isEmber ? 0.35 : 0.12);
-        p.rotation.x = (noise2(z, seed) - 0.5) * (isEmber ? 0.2 : 0.08);
-        p.castShadow = true;
-        p.receiveShadow = true;
-        group.add(p);
-        if (isCrystal && Math.random() < 0.4) {
-          const gem = new THREE.Mesh(
-            new THREE.OctahedronGeometry(0.22 * S * 0.4, 0),
-            mkMat(accent, { emissive: em, emissiveIntensity: 1.1, metalness: 0.6, roughness: 0.2 })
+        base.position.set(x, 0.14 * S * 0.3, z);
+        base.castShadow = true;
+        base.receiveShadow = true;
+        group.add(base);
+        // Shaft
+        const shaft = new THREE.Mesh(
+          isWhisper
+            ? new THREE.CylinderGeometry(thick * 0.42, thick * 0.5, h, 8)
+            : new THREE.BoxGeometry(thick, h, thick * 0.92),
+          stoneMat(isCrystal && Math.random() < 0.25)
+        );
+        shaft.position.set(x, h * 0.5 + 0.12, z);
+        shaft.rotation.z = lean != null ? lean : (noise2(x + seed, z) - 0.5) * (isEmber ? 0.38 : 0.1);
+        shaft.rotation.x = (noise2(z, seed) - 0.5) * (isEmber ? 0.22 : 0.07);
+        shaft.castShadow = true;
+        shaft.receiveShadow = true;
+        group.add(shaft);
+        // Capital
+        const cap = new THREE.Mesh(
+          new THREE.BoxGeometry(thick * 1.35, 0.22 * S * 0.3, thick * 1.35),
+          stoneMat(false)
+        );
+        cap.position.set(x, h + 0.2, z);
+        cap.rotation.copy(shaft.rotation);
+        group.add(cap);
+        // Rune strip (inset, not whole face)
+        if (Math.random() < 0.55 + resonance * 0.2) {
+          const strip = new THREE.Mesh(
+            new THREE.BoxGeometry(thick * 0.35, h * 0.45, 0.06 * S * 0.3),
+            runeMat()
           );
-          gem.position.set(x, h * (0.4 + Math.random() * 0.4), z + thick * 0.6);
+          strip.position.set(x, h * 0.55, z + thick * 0.52);
+          group.add(strip);
+          pulseParts.push(strip);
+        }
+        if (isCrystal && Math.random() < 0.35) {
+          const gem = new THREE.Mesh(
+            new THREE.OctahedronGeometry(0.18 * S * 0.35, 0),
+            mkMat(accent, { emissive: em, emissiveIntensity: 0.7, metalness: 0.6, roughness: 0.2 })
+          );
+          gem.position.set(x, h * 0.55, z + thick * 0.65);
           group.add(gem);
           pulseParts.push(gem);
         }
-        return p;
+        return shaft;
       }
 
-      function addWall(x, z, w, h, rotY) {
-        const wall = new THREE.Mesh(
-          new THREE.BoxGeometry(w, h, 0.45 * S * 0.35),
-          stoneMat(false)
-        );
-        wall.position.set(x, h * 0.5, z);
-        wall.rotation.y = rotY || 0;
-        if (isEmber) wall.rotation.z = (Math.random() - 0.5) * 0.25;
-        wall.castShadow = true;
-        wall.receiveShadow = true;
-        group.add(wall);
-        if (isEmber || Math.random() < 0.35) {
-          const chunk = new THREE.Mesh(
-            new THREE.BoxGeometry(w * 0.25, h * 0.2, 0.3 * S * 0.3),
+      function addPillar(x, z, h, lean) {
+        return addColumn(x, z, h, lean);
+      }
+
+      /** Wall with optional doorway / window gap (two slabs) */
+      function addWall(x, z, w, h, rotY, opts) {
+        opts = opts || {};
+        const thick = 0.42 * S * 0.32;
+        const hasDoor = opts.door || Math.random() < 0.45;
+        const hasWin = opts.window || (!hasDoor && Math.random() < 0.4);
+        if (hasDoor && w > 2.5 * S * 0.3) {
+          const gap = w * 0.28;
+          const side = (w - gap) * 0.5;
+          [-1, 1].forEach(function (sideSign) {
+            const panel = new THREE.Mesh(
+              new THREE.BoxGeometry(side, h, thick),
+              stoneMat(false)
+            );
+            const ox = sideSign * (gap * 0.5 + side * 0.5);
+            panel.position.set(x + Math.cos(rotY || 0) * ox, h * 0.5, z + Math.sin(rotY || 0) * ox);
+            panel.rotation.y = rotY || 0;
+            if (isEmber) panel.rotation.z = (Math.random() - 0.5) * 0.2;
+            panel.castShadow = true;
+            panel.receiveShadow = true;
+            group.add(panel);
+          });
+          // Lintel
+          const lintel = new THREE.Mesh(
+            new THREE.BoxGeometry(gap + side * 0.3, h * 0.18, thick * 1.1),
             stoneMat(false)
           );
-          chunk.position.set(x + (Math.random() - 0.5) * w * 0.3, h * 0.7, z + 0.35);
+          lintel.position.set(x, h * 0.88, z);
+          lintel.rotation.y = rotY || 0;
+          group.add(lintel);
+        } else {
+          const wall = new THREE.Mesh(
+            new THREE.BoxGeometry(w, h, thick),
+            stoneMat(false)
+          );
+          wall.position.set(x, h * 0.5, z);
+          wall.rotation.y = rotY || 0;
+          if (isEmber) wall.rotation.z = (Math.random() - 0.5) * 0.22;
+          // Broken top
+          if (Math.random() < 0.5) wall.scale.y = 0.65 + Math.random() * 0.35;
+          wall.castShadow = true;
+          wall.receiveShadow = true;
+          group.add(wall);
+          if (hasWin) {
+            const win = new THREE.Mesh(
+              new THREE.BoxGeometry(w * 0.22, h * 0.2, thick * 1.2),
+              mkMat(0x020617, { opacity: 0.15, roughness: 1 })
+            );
+            win.position.set(x, h * 0.55, z);
+            win.rotation.y = rotY || 0;
+            group.add(win);
+          }
+        }
+        // Broken chunk debris
+        if (isEmber || Math.random() < 0.4) {
+          const chunk = new THREE.Mesh(
+            new THREE.BoxGeometry(w * 0.2, h * 0.15, thick * 0.8),
+            stoneMat(false)
+          );
+          chunk.position.set(x + (Math.random() - 0.5) * w * 0.4, h * 0.15, z + 0.5);
           chunk.rotation.set(Math.random(), Math.random(), Math.random());
           group.add(chunk);
         }
-        return wall;
       }
 
+      /** Segmented arch (curve of blocks + keystone rune) */
       function addArch(cx, cz, h, w) {
-        addPillar(cx - w * 0.5, cz, h, 0.05);
-        addPillar(cx + w * 0.5, cz, h, -0.05);
-        const beam = new THREE.Mesh(
-          new THREE.BoxGeometry(w + 0.9 * S * 0.3, 0.45 * S * 0.35, 0.55 * S * 0.35),
-          stoneMat(isCrystal)
-        );
-        beam.position.set(cx, h + 0.12, cz);
-        beam.rotation.z = isEmber ? (Math.random() - 0.5) * 0.3 : 0;
-        beam.castShadow = true;
-        group.add(beam);
+        addColumn(cx - w * 0.5, cz, h, 0.04);
+        addColumn(cx + w * 0.5, cz, h, -0.04);
+        const segs = 5 + Math.floor(complexity);
+        for (let i = 0; i < segs; i++) {
+          const t = i / (segs - 1);
+          const ang = -Math.PI * 0.15 + t * Math.PI * 0.3;
+          const bx = cx + Math.sin(ang) * w * 0.15;
+          const by = h + Math.sin(t * Math.PI) * (0.9 + density * 0.4) * S * 0.28;
+          const block = new THREE.Mesh(
+            new THREE.BoxGeometry((w / segs) * 1.15, 0.4 * S * 0.32, 0.55 * S * 0.32),
+            stoneMat(i === Math.floor(segs / 2) && isCrystal)
+          );
+          block.position.set(bx + (t - 0.5) * w, by, cz);
+          block.rotation.z = (t - 0.5) * 0.5;
+          if (isEmber && i > segs - 2) {
+            block.rotation.z += 0.4;
+            block.position.y -= 0.3;
+          }
+          block.castShadow = true;
+          group.add(block);
+        }
         const key = new THREE.Mesh(
-          new THREE.BoxGeometry(0.7 * S * 0.35, 0.55 * S * 0.35, 0.6 * S * 0.35),
+          new THREE.BoxGeometry(0.55 * S * 0.32, 0.5 * S * 0.32, 0.5 * S * 0.32),
           runeMat()
         );
-        key.position.set(cx, h + 0.15, cz);
+        key.position.set(cx, h + 0.85 * S * 0.28, cz);
         group.add(key);
         pulseParts.push(key);
       }
 
+      function addStairs(x, z, steps, stepW, rotY) {
+        steps = steps || 4;
+        stepW = stepW || 2.2 * S * 0.35;
+        for (let i = 0; i < steps; i++) {
+          const st = new THREE.Mesh(
+            new THREE.BoxGeometry(stepW, 0.28 * S * 0.28, 0.55 * S * 0.3),
+            stoneMat(false)
+          );
+          const d = i * 0.5 * S * 0.3;
+          st.position.set(
+            x + Math.sin(rotY || 0) * d,
+            0.14 * S * 0.28 + i * 0.26 * S * 0.28,
+            z + Math.cos(rotY || 0) * d
+          );
+          st.rotation.y = rotY || 0;
+          st.castShadow = true;
+          st.receiveShadow = true;
+          group.add(st);
+        }
+      }
+
+      function addFloorSlabs(cx, cz, n, spread) {
+        for (let i = 0; i < n; i++) {
+          const slab = new THREE.Mesh(
+            new THREE.BoxGeometry(
+              (0.9 + Math.random() * 1.2) * S * 0.32,
+              0.14 * S * 0.25,
+              (0.7 + Math.random() * 1.0) * S * 0.32
+            ),
+            stoneMat(false)
+          );
+          slab.position.set(
+            cx + (noise2(seed + i, i) - 0.5) * spread,
+            0.06 + Math.random() * 0.04,
+            cz + (noise2(i, seed) - 0.5) * spread
+          );
+          slab.rotation.y = Math.random() * 0.5;
+          slab.rotation.z = (Math.random() - 0.5) * 0.08;
+          slab.receiveShadow = true;
+          group.add(slab);
+        }
+      }
+
       function addPlatform(y, size, float) {
+        // Tiered slab platform (not plain cylinder only)
         const plat = new THREE.Mesh(
-          new THREE.CylinderGeometry(size * 0.9, size, 0.55 * S * 0.3, isWhisper ? 6 : 8),
+          new THREE.CylinderGeometry(size * 0.92, size, 0.5 * S * 0.28, isWhisper ? 6 : 8),
           stoneMat(false)
         );
-        plat.position.y = y + 0.28;
+        plat.position.y = y + 0.25;
         plat.castShadow = true;
         plat.receiveShadow = true;
         group.add(plat);
+        addFloorSlabs(0, 0, 4 + Math.floor(complexity * 2), size * 0.85);
         if (float) {
           const ring = new THREE.Mesh(
-            new THREE.TorusGeometry(size * 0.7, 0.1 * S * 0.3, 6, 24),
+            new THREE.TorusGeometry(size * 0.72, 0.08 * S * 0.28, 6, 28),
             runeMat()
           );
           ring.rotation.x = Math.PI / 2;
-          ring.position.y = y - 0.35;
+          ring.position.y = y - 0.3;
           group.add(ring);
           pulseParts.push(ring);
         }
@@ -2159,223 +3322,328 @@
         pulseParts.push(plume);
       }
 
-      // ----- BUILD BY TYPE (mega landmark scale) -----
+      // ----- BUILD BY TYPE (mega landmark scale — tier A silhouettes) -----
       if (type.id === "monolith") {
-        const h = (7.5 + density * 5 + complexity * 2.5) * S * 0.55 * (isWhisper ? 1.25 : 1);
+        const h = (8.0 + density * 5 + complexity * 2.5) * S * 0.55 * (isWhisper ? 1.3 : 1);
+        // Plinth
+        const plinth = new THREE.Mesh(
+          new THREE.BoxGeometry(2.8 * S * 0.4, 0.55 * S * 0.3, 2.4 * S * 0.4),
+          stoneMat(false)
+        );
+        plinth.position.y = 0.28 * S * 0.3;
+        plinth.receiveShadow = true;
+        group.add(plinth);
         const mono = new THREE.Mesh(
-          new THREE.BoxGeometry(1.6 * S * 0.4, h, 1.1 * S * 0.4),
+          new THREE.BoxGeometry(1.7 * S * 0.4, h, 1.15 * S * 0.4),
           stoneMat(true)
         );
-        mono.position.y = h * 0.5;
-        mono.rotation.y = noise2(seed, 1) * 0.4;
-        if (isEmber) mono.rotation.z = 0.12;
+        mono.position.y = h * 0.5 + 0.35;
+        mono.rotation.y = noise2(seed, 1) * 0.35;
+        if (isEmber) mono.rotation.z = 0.14;
         mono.castShadow = true;
         group.add(mono);
+        // Carved face = thin rune strip, not full neon slab
         const face = new THREE.Mesh(
-          new THREE.BoxGeometry(1.65 * S * 0.4, h * 0.5, 0.14 * S * 0.3),
+          new THREE.BoxGeometry(0.9 * S * 0.35, h * 0.42, 0.1 * S * 0.28),
           runeMat()
         );
-        face.position.set(0, h * 0.55, 0.6 * S * 0.35);
+        face.position.set(0, h * 0.55, 0.62 * S * 0.35);
         group.add(face);
         pulseParts.push(face);
-        addRunePlate(0, 0.15, 1.8 * S * 0.35, 0);
-        if (density > 0.35 || resonance > 0.3) addStarCoreLoot(0, h * 0.85, 0.8 * S * 0.3);
-        addRubble(3 + Math.floor(complexity * 2), 5.5 * S * 0.35);
+        addStairs(0, 2.2 * S * 0.35, 4, 2.0 * S * 0.35, 0);
+        addRunePlate(0, 0.2, 2.4 * S * 0.35, 0);
+        addFloorSlabs(0, 0, 5, 4 * S * 0.35);
+        if (density > 0.35 || resonance > 0.3) {
+          // Altar bowl under loot
+          const bowl = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.55 * S * 0.3, 0.7 * S * 0.3, 0.35 * S * 0.3, 8),
+            stoneMat(false)
+          );
+          bowl.position.set(0, h * 0.12, 1.1 * S * 0.3);
+          group.add(bowl);
+          addStarCoreLoot(0, h * 0.82, 0.75 * S * 0.3);
+        }
+        addRubble(8 + Math.floor(complexity * 3), 7 * S * 0.35);
       } else if (type.id === "arch") {
-        addPlatform(0, (4.0 + density * 1.5) * S * 0.35, false);
-        addArch(0, 0, (5.5 + density * 3) * S * 0.4, (4.2 + density * 1.2) * S * 0.35);
-        if (complexity > 0.7) addArch(0, -3.5 * S * 0.35, (4.2 + density * 2) * S * 0.4, 3.2 * S * 0.35);
+        addPlatform(0, (4.2 + density * 1.5) * S * 0.35, false);
+        addStairs(0, 3.2 * S * 0.35, 3, 2.4 * S * 0.35, 0);
+        addArch(0, 0, (5.8 + density * 3) * S * 0.4, (4.4 + density * 1.2) * S * 0.35);
+        if (complexity > 0.65) addArch(0, -3.8 * S * 0.35, (4.4 + density * 2) * S * 0.4, 3.4 * S * 0.35);
+        // Side ruins — broken symmetry
+        if (Math.random() < 0.7) addColumn(3.5 * S * 0.35, 1.2 * S * 0.35, 3.2 * S * 0.35, 0.25);
         addRunePlate(0, 0.7, 2.8 * S * 0.35, 0);
-        if (Math.random() < 0.55 + density * 0.3) addStarCoreLoot(0, 1.2 * S * 0.35, 0);
-        addRubble(4, 6 * S * 0.35);
+        if (Math.random() < 0.55 + density * 0.3) {
+          const ped = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.5 * S * 0.3, 0.65 * S * 0.3, 0.5 * S * 0.3, 8),
+            stoneMat(false)
+          );
+          ped.position.set(0, 0.4, 0);
+          group.add(ped);
+          addStarCoreLoot(0, 1.15 * S * 0.35, 0);
+        }
+        addRubble(10, 7.5 * S * 0.35);
+        addFloorSlabs(0, 0, 6, 5 * S * 0.35);
         if (isCrystal) {
-          for (let i = 0; i < 2; i++) {
+          for (let i = 0; i < 3; i++) {
             const c = new THREE.Mesh(
-              new THREE.ConeGeometry(0.35 * S * 0.3, 2.0 * S * 0.35, 5),
-              mkMat(accent, { emissive: em, emissiveIntensity: 1.1, metalness: 0.6, roughness: 0.2 })
+              new THREE.ConeGeometry(0.3 * S * 0.3, 1.8 * S * 0.35, 5),
+              mkMat(accent, { emissive: em, emissiveIntensity: 0.65, metalness: 0.55, roughness: 0.22 })
             );
-            c.position.set((i - 0.5) * 3.5 * S * 0.35, 1.0 * S * 0.3, 0.8);
+            c.position.set((i - 1) * 2.2 * S * 0.35, 0.9 * S * 0.3, 1.2);
             group.add(c);
           }
         }
       } else if (type.id === "outpost") {
-        const baseSz = (5.5 + density * 2.5) * S * 0.35;
-        addPlatform(0, baseSz * 0.55, false);
-        const ph = (4.0 + density * 3.5 * complexity) * S * 0.4;
-        const spread = 2.8 * S * 0.35;
-        const corners = [
-          [1, 1],
-          [-1, 1],
-          [1, -1],
-          [-1, -0.9],
-        ];
-        corners.forEach((c, i) => {
-          const broken = isEmber && i > 1;
-          addPillar(c[0] * spread, c[1] * spread * 0.85, broken ? ph * 0.45 : ph);
+        const baseSz = (5.8 + density * 2.5) * S * 0.35;
+        addPlatform(0, baseSz * 0.5, false);
+        addStairs(0, baseSz * 0.55, 4, 2.6 * S * 0.35, 0);
+        const ph = (4.2 + density * 3.5 * complexity) * S * 0.4;
+        const spread = 3.0 * S * 0.35;
+        const corners = [[1, 1], [-1, 1], [1, -1], [-1, -0.85]];
+        corners.forEach(function (c, i) {
+          const broken = isEmber ? i > 1 : i === 3 && Math.random() < 0.5;
+          addColumn(c[0] * spread, c[1] * spread * 0.85, broken ? ph * 0.4 : ph, broken ? 0.35 : 0);
         });
-        addWall(0, spread * 0.9, 5.0 * S * 0.35 + density, (2.4 + density) * S * 0.4, 0);
-        if (complexity > 0.6) addWall(-spread, 0, 4.0 * S * 0.35, 2.6 * S * 0.4, Math.PI / 2);
+        addWall(0, spread * 0.95, 5.2 * S * 0.35 + density, (2.6 + density) * S * 0.4, 0, { door: true });
+        // Missing wall side — open for sprint-through
+        if (complexity > 0.55) addWall(-spread, 0, 4.2 * S * 0.35, 2.8 * S * 0.4, Math.PI / 2, { window: true });
+        // Fallen roof beam
         const beam = new THREE.Mesh(
-          new THREE.BoxGeometry(5.0 * S * 0.35, 0.4 * S * 0.3, 0.45 * S * 0.3),
+          new THREE.BoxGeometry(5.2 * S * 0.35, 0.38 * S * 0.28, 0.42 * S * 0.28),
           stoneMat(false)
         );
-        beam.position.set(0.4, ph * 0.7, spread * 0.8);
-        beam.rotation.z = -0.35;
+        beam.position.set(0.5, ph * 0.55, spread * 0.55);
+        beam.rotation.z = -0.45;
+        beam.rotation.y = 0.2;
+        beam.castShadow = true;
         group.add(beam);
-        addRunePlate(0, 0.7, -spread * 0.85, Math.PI);
+        addRunePlate(0, 0.65, -spread * 0.9, Math.PI);
         addEnergyVent(spread * 0.5, -spread * 0.35);
-        if (density > 0.25 || resonance > 0.25) addStarCoreLoot(0, 1.4 * S * 0.35, 0);
-        addRubble(5 + Math.floor(complexity * 2), 7 * S * 0.35);
+        if (density > 0.25 || resonance > 0.25) {
+          const ped = new THREE.Mesh(
+            new THREE.BoxGeometry(1.1 * S * 0.3, 0.45 * S * 0.3, 1.1 * S * 0.3),
+            stoneMat(false)
+          );
+          ped.position.set(0, 0.35, 0);
+          group.add(ped);
+          addStarCoreLoot(0, 1.25 * S * 0.35, 0);
+        }
+        addRubble(12 + Math.floor(complexity * 3), 8.5 * S * 0.35);
+        addFloorSlabs(0, 0, 7, 6 * S * 0.35);
       } else if (type.id === "tower") {
+        // Octagonal / tapered stack with broken crown
         const levels = 3 + Math.floor(complexity * 2);
         let y = 0;
         for (let i = 0; i < levels; i++) {
-          const s = (3.6 - i * 0.35) * S * 0.35;
-          const h = (2.8 + density * 0.6) * S * 0.4;
+          const s = (3.4 - i * 0.38) * S * 0.35;
+          const h = (2.6 + density * 0.55) * S * 0.4;
           const seg = new THREE.Mesh(
-            new THREE.BoxGeometry(s, h, s),
+            isWhisper
+              ? new THREE.CylinderGeometry(s * 0.45, s * 0.55, h, 8)
+              : new THREE.BoxGeometry(s, h, s),
             stoneMat(i === levels - 1 && isCrystal)
           );
           seg.position.y = y + h * 0.5;
           if (isEmber && i === levels - 1) {
-            seg.rotation.z = 0.4;
-            seg.position.x = 0.8;
+            seg.rotation.z = 0.45;
+            seg.position.x = 0.9;
+          } else if (i === levels - 1 && Math.random() < 0.5) {
+            seg.scale.y = 0.55; // snapped top
           }
           seg.castShadow = true;
           group.add(seg);
+          // Ledge ring
+          if (i < levels - 1) {
+            const ledge = new THREE.Mesh(
+              new THREE.BoxGeometry(s * 1.15, 0.18 * S * 0.28, s * 1.15),
+              stoneMat(false)
+            );
+            ledge.position.y = y + h;
+            group.add(ledge);
+          }
           y += h * 0.92;
         }
-        addRubble(6, 5.5 * S * 0.35);
-        addPillar(3.2 * S * 0.35, 1.0, (3.5 + density * 2) * S * 0.4, 0.4);
-        addRunePlate(0, 0.2, 3.0 * S * 0.35, 0);
-        if (Math.random() < 0.6 + resonance * 0.3) addStarCoreLoot(0, y * 0.45, 0);
+        addStairs(2.5 * S * 0.35, 0, 5, 1.8 * S * 0.35, Math.PI / 2);
+        addColumn(3.4 * S * 0.35, 1.2, (3.8 + density * 2) * S * 0.4, 0.35);
+        addColumn(-2.8 * S * 0.35, -1.5, 2.2 * S * 0.35, -0.2);
+        addRunePlate(0, 0.25, 3.2 * S * 0.35, 0);
+        if (Math.random() < 0.6 + resonance * 0.3) addStarCoreLoot(0, y * 0.4, 0);
+        addRubble(12, 7 * S * 0.35);
+        addFloorSlabs(0, 0, 6, 5.5 * S * 0.35);
       } else if (type.id === "platform") {
-        const floatY = (isWhisper ? 3.5 + density * 3 : 1.2 + density * 1.2) * S * 0.35;
-        addPlatform(floatY, (4.0 + density * 1.8) * S * 0.35, true);
-        const n = 3 + Math.floor(complexity * 2);
+        const floatY = (isWhisper ? 3.8 + density * 3 : 1.3 + density * 1.2) * S * 0.35;
+        addPlatform(floatY, (4.2 + density * 1.8) * S * 0.35, true);
+        const n = 4 + Math.floor(complexity * 2);
         for (let i = 0; i < n; i++) {
           const a = (i / n) * Math.PI * 2 + seed;
-          const ph = (2.2 + density * 1.5) * S * 0.4;
-          const px = Math.cos(a) * 2.6 * S * 0.35;
-          const pz = Math.sin(a) * 2.6 * S * 0.35;
-          const p = new THREE.Mesh(
-            new THREE.BoxGeometry(0.55 * S * 0.35, ph, 0.55 * S * 0.35),
-            stoneMat(isCrystal)
-          );
-          p.position.set(px, floatY + 0.4 + ph * 0.5, pz);
-          p.castShadow = true;
-          group.add(p);
+          const ph = (2.0 + density * 1.4) * S * 0.4 * (i % 3 === 0 ? 0.55 : 1);
+          addColumn(Math.cos(a) * 2.7 * S * 0.35, Math.sin(a) * 2.7 * S * 0.35, ph, (i % 2) * 0.15);
         }
-        addRunePlate(0, floatY + 0.7, 0, 0);
-        addStarCoreLoot(0, floatY + 1.2, 0);
+        // Altar
+        const altar = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.9 * S * 0.3, 1.1 * S * 0.3, 0.7 * S * 0.3, 8),
+          stoneMat(true)
+        );
+        altar.position.y = floatY + 0.65;
+        group.add(altar);
+        addRunePlate(0, floatY + 0.85, 0, 0);
+        addStarCoreLoot(0, floatY + 1.35, 0);
         if (isWhisper) {
-          for (let i = 0; i < 6; i++) {
+          for (let i = 0; i < 8; i++) {
             const star = new THREE.Mesh(
-              new THREE.SphereGeometry(0.12 * S * 0.3, 6, 6),
-              mkMat(0xe0e7ff, { emissive: 0xa5b4fc, emissiveIntensity: 1.4 })
+              new THREE.SphereGeometry(0.1 * S * 0.28, 6, 6),
+              mkMat(0xe0e7ff, { emissive: 0xa5b4fc, emissiveIntensity: 0.85 })
             );
-            const a = (i / 6) * Math.PI * 2;
-            star.position.set(Math.cos(a) * 3.5 * S * 0.35, floatY + 2.0, Math.sin(a) * 3.5 * S * 0.35);
+            const a = (i / 8) * Math.PI * 2;
+            star.position.set(Math.cos(a) * 3.6 * S * 0.35, floatY + 1.8, Math.sin(a) * 3.6 * S * 0.35);
             group.add(star);
             pulseParts.push(star);
           }
         }
       } else if (type.id === "temple") {
-        addPlatform(0, (7.5 + density * 2) * S * 0.35, false);
+        addPlatform(0, (7.8 + density * 2) * S * 0.35, false);
+        addStairs(0, 6.5 * S * 0.35, 6, 3.5 * S * 0.35, 0);
         const cols = 8 + Math.floor(density * 2);
         for (let i = 0; i < cols; i++) {
           const a = (i / cols) * Math.PI * 2;
-          const rad = (5.5 + density) * S * 0.35;
-          addPillar(Math.cos(a) * rad, Math.sin(a) * rad, (6.0 + density * 3 * complexity) * S * 0.4);
+          const rad = (5.6 + density) * S * 0.35;
+          // Broken symmetry — skip one column
+          if (i === 3) continue;
+          const broken = i === 6;
+          addColumn(
+            Math.cos(a) * rad,
+            Math.sin(a) * rad,
+            broken ? (3.0 + density) * S * 0.35 : (6.2 + density * 3 * complexity) * S * 0.4,
+            broken ? 0.4 : 0
+          );
         }
-        addWall(0, 4.0 * S * 0.35, 6.5 * S * 0.35, (3.8 + density * 1.5) * S * 0.4, 0);
-        addWall(0, -4.0 * S * 0.35, 6.5 * S * 0.35, 3.2 * S * 0.4, 0);
-        addArch(0, 0, (6.5 + density * 2.5) * S * 0.4, 4.8 * S * 0.35);
+        addWall(0, 4.2 * S * 0.35, 6.8 * S * 0.35, (3.6 + density * 1.4) * S * 0.4, 0, { door: true });
+        addWall(0, -4.2 * S * 0.35, 6.8 * S * 0.35, 2.8 * S * 0.4, 0, { window: true });
+        addArch(0, 0, (6.8 + density * 2.5) * S * 0.4, 5.0 * S * 0.35);
+        // Inner sanctum pedestal
         const altar = new THREE.Mesh(
-          new THREE.CylinderGeometry(1.4 * S * 0.35, 1.7 * S * 0.35, 1.1 * S * 0.35, 8),
+          new THREE.CylinderGeometry(1.5 * S * 0.32, 1.85 * S * 0.32, 1.15 * S * 0.32, 8),
           stoneMat(true)
         );
-        altar.position.y = 0.7 * S * 0.35;
+        altar.position.y = 0.75 * S * 0.32;
         group.add(altar);
-        addStarCoreLoot(0, 2.0 * S * 0.35, 0);
-        if (resonance > 0.45) addStarCoreLoot(3.0 * S * 0.35, 1.2 * S * 0.35, 2.0 * S * 0.35);
-        addRunePlate(0, 0.3, 5.0 * S * 0.35, 0);
-        addRunePlate(0, 0.3, -5.0 * S * 0.35, Math.PI);
-        addEnergyVent(-3.8 * S * 0.35, 0);
-        addEnergyVent(3.8 * S * 0.35, 0);
-        addRubble(8, 10 * S * 0.35);
+        const bowl = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.7 * S * 0.28, 0.9 * S * 0.28, 0.35 * S * 0.28, 10),
+          runeMat()
+        );
+        bowl.position.y = 1.4 * S * 0.32;
+        group.add(bowl);
+        pulseParts.push(bowl);
+        addStarCoreLoot(0, 1.95 * S * 0.35, 0);
+        if (resonance > 0.45) addStarCoreLoot(3.2 * S * 0.35, 1.1 * S * 0.35, 2.0 * S * 0.35);
+        addRunePlate(0, 0.35, 5.2 * S * 0.35, 0);
+        addEnergyVent(-4.0 * S * 0.35, 0);
+        addEnergyVent(4.0 * S * 0.35, 0);
+        addRubble(14, 12 * S * 0.35);
+        addFloorSlabs(0, 0, 10, 9 * S * 0.35);
         for (let i = 0; i < 4; i++) {
           const spire = new THREE.Mesh(
-            new THREE.ConeGeometry(0.4 * S * 0.3, (2.8 + density * 1.5) * S * 0.35, 5),
+            new THREE.ConeGeometry(0.38 * S * 0.28, (2.6 + density * 1.4) * S * 0.32, 5),
             isEmber
-              ? mkMat(0x7c2d12, { emissive: 0xea580c, emissiveIntensity: 0.7, roughness: 0.7 })
-              : mkMat(accent, { emissive: em, emissiveIntensity: 1.2, metalness: 0.55, roughness: 0.2 })
+              ? mkMat(0x7c2d12, { emissive: 0xea580c, emissiveIntensity: 0.45, roughness: 0.7 })
+              : mkMat(accent, { emissive: em, emissiveIntensity: 0.65, metalness: 0.5, roughness: 0.22 })
           );
-          spire.position.set((i - 1.5) * 2.4 * S * 0.35, 1.5 * S * 0.3, 6.0 * S * 0.35);
+          spire.position.set((i - 1.5) * 2.5 * S * 0.32, 1.4 * S * 0.28, 6.2 * S * 0.32);
           group.add(spire);
         }
       } else if (type.id === "wreck") {
-        addPlatform(0, 4.5 * S * 0.35, false);
+        addPlatform(0, 4.6 * S * 0.35, false);
+        // Diagonal torn hull
         const fallen = new THREE.Mesh(
-          new THREE.BoxGeometry(3.0 * S * 0.35, 2.2 * S * 0.35, 8.0 * S * 0.35),
+          new THREE.BoxGeometry(2.8 * S * 0.35, 2.0 * S * 0.32, 8.5 * S * 0.35),
           stoneMat(false)
         );
-        fallen.position.set(1.2, 1.2 * S * 0.3, 0.5);
-        fallen.rotation.z = 0.55;
-        fallen.rotation.y = 0.3;
+        fallen.position.set(1.3, 1.1 * S * 0.28, 0.4);
+        fallen.rotation.z = 0.58;
+        fallen.rotation.y = 0.35;
         fallen.castShadow = true;
         group.add(fallen);
-        addPillar(-3.0 * S * 0.35, 2.0 * S * 0.35, 5.0 * S * 0.4, 0.5);
-        addPillar(3.5 * S * 0.35, -1.5 * S * 0.35, 2.5 * S * 0.4, -0.3);
-        addWall(-0.5, -3.0 * S * 0.35, 6.5 * S * 0.35, 1.8 * S * 0.4, 0.2);
+        // Exposed plates
         for (let i = 0; i < 4; i++) {
+          const plate = new THREE.Mesh(
+            new THREE.BoxGeometry(1.4 * S * 0.3, 0.15 * S * 0.25, 2.2 * S * 0.3),
+            stoneMat(false)
+          );
+          plate.position.set((Math.random() - 0.5) * 4, 0.4 + Math.random(), (Math.random() - 0.5) * 3);
+          plate.rotation.set(Math.random() * 0.5, Math.random(), Math.random() * 0.8);
+          group.add(plate);
+        }
+        addColumn(-3.2 * S * 0.35, 2.0 * S * 0.35, 5.2 * S * 0.4, 0.55);
+        addColumn(3.6 * S * 0.35, -1.6 * S * 0.35, 2.2 * S * 0.4, -0.35);
+        addWall(-0.5, -3.2 * S * 0.35, 6.8 * S * 0.35, 1.6 * S * 0.4, 0.15);
+        for (let i = 0; i < 5; i++) {
           const scorch = new THREE.Mesh(
-            new THREE.CircleGeometry((1.2 + Math.random() * 0.9) * S * 0.35, 10),
-            mkMat(0x1a0805, {
-              emissive: 0x3b1208,
-              emissiveIntensity: 0.4,
-              roughness: 1,
-              opacity: 0.85,
-            })
+            new THREE.CircleGeometry((1.1 + Math.random()) * S * 0.32, 10),
+            mkMat(0x1a0805, { emissive: 0x3b1208, emissiveIntensity: 0.35, roughness: 1, opacity: 0.85 })
           );
           scorch.rotation.x = -Math.PI / 2;
-          scorch.position.set((Math.random() - 0.5) * 5, 0.06, (Math.random() - 0.5) * 5);
+          scorch.position.set((Math.random() - 0.5) * 5.5, 0.05, (Math.random() - 0.5) * 5.5);
           group.add(scorch);
         }
         addEnergyVent(2.0 * S * 0.35, 1.2 * S * 0.35);
-        if (Math.random() < 0.5 + density * 0.3) {
+        if (Math.random() < 0.55 + density * 0.3) {
           const lava = new THREE.Mesh(
-            new THREE.CircleGeometry(1.1 * S * 0.35, 10),
-            mkMat(0xf97316, { emissive: 0xea580c, emissiveIntensity: 1.3, opacity: 0.9 })
+            new THREE.CircleGeometry(1.15 * S * 0.32, 10),
+            mkMat(0xf97316, { emissive: 0xea580c, emissiveIntensity: 0.9, opacity: 0.88 })
           );
           lava.rotation.x = -Math.PI / 2;
-          lava.position.set(-1.2, 0.08, 0.8);
+          lava.position.set(-1.2, 0.07, 0.8);
           group.add(lava);
           pulseParts.push(lava);
         }
-        addRunePlate(0, 0.6, 3.2 * S * 0.35, 0);
-        if (density > 0.3 || resonance > 0.2) addStarCoreLoot(0, 1.6 * S * 0.35, 0);
-        addRubble(8, 8 * S * 0.35);
+        // Exposed core recess
+        const coreShell = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.85 * S * 0.28, 1.1 * S * 0.28, 0.6 * S * 0.28, 8),
+          stoneMat(false)
+        );
+        coreShell.position.set(0, 0.4, 0);
+        group.add(coreShell);
+        if (density > 0.3 || resonance > 0.2) addStarCoreLoot(0, 1.35 * S * 0.35, 0);
+        addRubble(14, 9.5 * S * 0.35);
+        addFloorSlabs(0, 0, 8, 7 * S * 0.35);
       }
 
-      // Overgrown flora on ruin
-      if (!isEmber && density > 0.3 && Math.random() < 0.5) {
-        for (let i = 0; i < 4; i++) {
+      // Overgrown flora / vines linking ruin to biome (tier A)
+      if (density > 0.25 && Math.random() < 0.75) {
+        const plantC = biome.plant || 0xa78bfa;
+        const plantE = biome.plantEmissive || 0x7c3aed;
+        const nMoss = isEmber ? 3 : 6 + Math.floor(density * 4);
+        for (let i = 0; i < nMoss; i++) {
           const moss = new THREE.Mesh(
-            new THREE.SphereGeometry(0.3 * S * 0.3, 6, 6),
-            mkMat(biome.plant || 0xa78bfa, {
-              emissive: biome.plantEmissive || 0x7c3aed,
-              emissiveIntensity: 0.5,
-              roughness: 0.8,
-              opacity: 0.85,
+            isEmber
+              ? new THREE.TetrahedronGeometry(0.28 * S * 0.28, 0)
+              : new THREE.SphereGeometry(0.28 * S * 0.28, 6, 6),
+            mkMat(isEmber ? 0x7c2d12 : plantC, {
+              emissive: isEmber ? 0xea580c : plantE,
+              emissiveIntensity: 0.28,
+              roughness: 0.85,
+              opacity: 0.88,
             })
           );
           moss.position.set(
-            (Math.random() - 0.5) * 5 * S * 0.35,
-            0.4 + Math.random() * 2.5,
-            (Math.random() - 0.5) * 5 * S * 0.35
+            (Math.random() - 0.5) * 7 * S * 0.35,
+            0.35 + Math.random() * 3.2,
+            (Math.random() - 0.5) * 7 * S * 0.35
           );
+          moss.scale.set(1 + Math.random(), 0.6 + Math.random() * 0.5, 1 + Math.random());
           group.add(moss);
+        }
+        // Hanging vine capsules
+        if (!isEmber) {
+          for (let i = 0; i < 3; i++) {
+            const vine = new THREE.Mesh(
+              new THREE.CapsuleGeometry(0.06 * S * 0.28, 1.2 * S * 0.32, 3, 5),
+              mkMat(plantC, { emissive: plantE, emissiveIntensity: 0.2, roughness: 0.7, opacity: 0.9 })
+            );
+            vine.position.set((Math.random() - 0.5) * 4, 2.2 + Math.random(), (Math.random() - 0.5) * 3);
+            vine.rotation.z = (Math.random() - 0.5) * 0.5;
+            group.add(vine);
+          }
         }
       }
 
@@ -2424,6 +3692,40 @@
 
       // Store footprint for loot radius
       group.userData.ruinRadius = 4.5 * S * 0.4;
+
+      // Walkable tops + solid walls (world space filled on spawn)
+      // Local colliders: half = XZ radius, top = local Y of stand surface
+      const walk = [];
+      const walls = [];
+      const rr = 4.5 * S * 0.4;
+      if (type.id === "platform") {
+        const floatY = (isWhisper ? 3.8 + density * 3 : 1.3 + density * 1.2) * S * 0.35;
+        const psz = (4.2 + density * 1.8) * S * 0.35;
+        walk.push({ lx: 0, lz: 0, half: psz * 0.95, top: floatY + 0.5 * S * 0.28 });
+        walls.push({ lx: 0, lz: 0, half: psz * 0.88, y0: floatY - 0.2, y1: floatY + 0.45 });
+      } else if (type.id === "temple") {
+        const psz = (7.8 + density * 2) * S * 0.35;
+        walk.push({ lx: 0, lz: 0, half: psz * 0.92, top: 0.55 * S * 0.32 });
+        walls.push({ lx: 0, lz: 4.2 * S * 0.35, half: psz * 0.55, y0: 0, y1: 3.5 * S * 0.4 });
+        walls.push({ lx: 0, lz: -4.2 * S * 0.35, half: psz * 0.55, y0: 0, y1: 2.8 * S * 0.4 });
+      } else if (type.id === "outpost" || type.id === "tower") {
+        walk.push({ lx: 0, lz: 0, half: rr * 0.7, top: 1.2 * S * 0.35 });
+        walls.push({ lx: 0, lz: 0, half: rr * 0.55, y0: 0, y1: 3.5 * S * 0.4 });
+      } else if (type.id === "monolith") {
+        walls.push({ lx: 0, lz: 0, half: 1.1 * S * 0.35, y0: 0, y1: 5 * S * 0.4 });
+      } else if (type.id === "arch") {
+        walk.push({ lx: 0, lz: 0, half: 2.2 * S * 0.35, top: 0.35 });
+        walls.push({ lx: 2.2 * S * 0.35, lz: 0, half: 0.8 * S * 0.35, y0: 0, y1: 4 * S * 0.4 });
+        walls.push({ lx: -2.2 * S * 0.35, lz: 0, half: 0.8 * S * 0.35, y0: 0, y1: 4 * S * 0.4 });
+      } else if (type.id === "wreck") {
+        walk.push({ lx: 0, lz: 0, half: rr * 0.85, top: 0.9 * S * 0.3 });
+        walls.push({ lx: 0, lz: 0, half: rr * 0.7, y0: 0, y1: 2.2 * S * 0.35 });
+      } else {
+        walk.push({ lx: 0, lz: 0, half: rr * 0.75, top: 0.5 });
+        walls.push({ lx: 0, lz: 0, half: rr * 0.5, y0: 0, y1: 2.5 * S * 0.35 });
+      }
+      group.userData.walkColliders = walk;
+      group.userData.wallColliders = walls;
 
       group.userData.kind = "ruin";
       group.userData.ruinType = type.id;
@@ -2927,16 +4229,24 @@
       this.pools = {
         path: new ObjectPool(createPathMesh, "path", 16),
         terrain: new ObjectPool(createTerrainMesh, "terrain", 40),
-        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 72),
+        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 88),
         ruin: new ObjectPool(createRuinMesh, "ruin", 20),
         detail: new ObjectPool(createDetailMesh, "detail", 80),
       };
       this.pathTypeStats = { hidden: 0, shortcut: 0, branch: 0, energy: 0 };
-      this.terrainTypeStats = { boulders: 0, ridge: 0, crater: 0, cliff: 0, floater: 0 };
+      this.terrainTypeStats = {
+        boulders: 0, ridge: 0, crater: 0, cliff: 0, floater: 0, landmark: 0, canyon: 0,
+      };
       this.vegTypeStats = {
         stalk: 0, flower: 0, bush: 0, vine: 0, cluster: 0, floater: 0, canopy: 0,
-        tree: 0, megaTree: 0, spire: 0,
+        tree: 0, megaTree: 0, spire: 0, forest: 0,
       };
+      this._forestToastT = 0;
+      this._sceneBand = "sparse";
+      // Shared scene footprints so path/terrain co-author with forests
+      this._sceneFootprints = [];
+      this._sceneFootMax = 14;
+      this._coopToastT = 0;
       this.ruinTypeStats = {
         monolith: 0, outpost: 0, tower: 0, arch: 0, platform: 0, temple: 0, wreck: 0,
       };
@@ -2958,6 +4268,71 @@
     pulseFlux(amount) {
       this._fluxBoost = Math.min(1.5, this._fluxBoost + (amount || 0.6));
       this.cooldown = 0;
+    }
+
+    /** Register a forest / canyon footprint for path+terrain co-authorship */
+    _registerSceneFootprint(fp) {
+      if (!fp) return;
+      this._sceneFootprints.push({
+        kind: fp.kind || "forest",
+        x: fp.x,
+        z: fp.z,
+        radius: fp.radius || 16,
+        yaw: fp.yaw || 0,
+        corridor: fp.corridor != null ? fp.corridor : 3.4,
+        band: fp.band || "high",
+        biomeId: fp.biomeId || "crystalNebula",
+        age: 0,
+        maxAge: fp.maxAge != null ? fp.maxAge : 22,
+        pathDone: false,
+        terrainDone: 0,
+        ruinDone: false,
+      });
+      while (this._sceneFootprints.length > this._sceneFootMax) {
+        this._sceneFootprints.shift();
+      }
+    }
+
+    _tickSceneFootprints(dt) {
+      for (let i = this._sceneFootprints.length - 1; i >= 0; i--) {
+        this._sceneFootprints[i].age += dt;
+        if (this._sceneFootprints[i].age > this._sceneFootprints[i].maxAge) {
+          this._sceneFootprints.splice(i, 1);
+        }
+      }
+    }
+
+    /** Nearest living footprint ahead of Bolt (prefer forests still needing path/terrain/ruin) */
+    _findSceneAhead(origin, yaw, opts) {
+      opts = opts || {};
+      const fx = Math.sin(yaw);
+      const fz = Math.cos(yaw);
+      const maxDist = opts.maxDist != null ? opts.maxDist : 90;
+      const needPath = !!opts.needPath;
+      const needTerrain = !!opts.needTerrain;
+      const needRuin = !!opts.needRuin;
+      let best = null;
+      let bestScore = -1e9;
+      for (let i = 0; i < this._sceneFootprints.length; i++) {
+        const s = this._sceneFootprints[i];
+        if (needPath && s.pathDone) continue;
+        if (needTerrain && s.terrainDone >= 2) continue;
+        if (needRuin && s.ruinDone) continue;
+        const dx = s.x - origin.x;
+        const dz = s.z - origin.z;
+        const dist = Math.hypot(dx, dz);
+        // Prefer scenes well ahead of Bolt (not underfoot)
+        if (dist > maxDist || dist < CLEAR.player * 0.9) continue;
+        const ahead = dx * fx + dz * fz;
+        if (ahead < 8) continue; // must be clearly forward
+        const lateral = Math.abs(-dz * fx + dx * fz);
+        const score = ahead * 1.4 - dist * 0.35 - lateral * 0.2 - s.age * 0.15;
+        if (score > bestScore) {
+          bestScore = score;
+          best = s;
+        }
+      }
+      return best;
     }
 
     _tooClose(x, z, minDist) {
@@ -2988,6 +4363,42 @@
     }
 
     /**
+     * True if (x,z) sits in Bolt's run lane (forward corridor).
+     * Rocks/forests/ruins must stay OUT of this so Bolt stays visible.
+     */
+    _inRunCorridor(x, z, yaw, halfWidth, maxAhead, maxBehind) {
+      const p = this._lastPlayerPos;
+      if (!p) return false;
+      const hw = halfWidth != null ? halfWidth : CLEAR.corridorHalf;
+      const ahead = maxAhead != null ? maxAhead : CLEAR.corridorAhead;
+      const behind = maxBehind != null ? maxBehind : CLEAR.corridorBehind;
+      const dx = x - p.x;
+      const dz = z - p.z;
+      const fx = Math.sin(yaw);
+      const fz = Math.cos(yaw);
+      const rx = Math.cos(yaw);
+      const rz = -Math.sin(yaw);
+      const along = dx * fx + dz * fz;
+      const side = dx * rx + dz * rz;
+      if (along < -behind || along > ahead) return false;
+      return Math.abs(side) < hw;
+    }
+
+    /**
+     * Count live landmark/canyon terrain (cap spam that buries Bolt).
+     */
+    _countLandmarks() {
+      const pool = this.pools.terrain;
+      if (!pool || !pool.live) return 0;
+      let n = 0;
+      for (let i = 0; i < pool.live.length; i++) {
+        const e = pool.live[i];
+        if (e && e.mesh && e.mesh.userData && e.mesh.userData.landmark) n++;
+      }
+      return n;
+    }
+
+    /**
      * Place a spawn around Bolt: mostly SIDE + SIDE-FORWARD, never on him.
      * Dead-ahead and underfoot are avoided so Bolt is never hidden.
      * @returns {{x,z}|null}
@@ -2995,8 +4406,8 @@
     _placeAround(origin, yaw, opts) {
       opts = opts || {};
       const orbital = !!opts.orbital;
-      const minR = opts.minR != null ? opts.minR : orbital ? 22 : 12;
-      const maxR = opts.maxR != null ? opts.maxR : orbital ? 80 : 36;
+      const minR = opts.minR != null ? opts.minR : orbital ? 28 : CLEAR.player;
+      const maxR = opts.maxR != null ? opts.maxR : orbital ? 90 : CLEAR.player + 30;
       const preferSide = opts.preferSide !== false;
       const fx = Math.sin(yaw);
       const fz = Math.cos(yaw);
@@ -3004,26 +4415,37 @@
       const rz = -Math.sin(yaw);
       const ox = origin.x;
       const oz = origin.z;
-      const stackMin = opts.stackMin != null ? opts.stackMin : 2.5;
+      const stackMin = opts.stackMin != null ? opts.stackMin : 4;
       // Hard personal bubble — never spawn inside this radius of Bolt
-      const clearR = opts.clearR != null ? opts.clearR : minR;
+      const clearR =
+        opts.clearR != null
+          ? Math.max(opts.clearR, CLEAR.player * 0.85)
+          : Math.max(minR, CLEAR.player);
+      // Run lane half-width — block clutter on the path Bolt is sprinting
+      const corridorHalf =
+        opts.corridorHalf != null
+          ? opts.corridorHalf
+          : orbital
+            ? 0
+            : CLEAR.corridorHalf;
+      const blockCorridor = opts.blockCorridor !== false && !orbital;
 
-      for (let attempt = 0; attempt < 12; attempt++) {
+      for (let attempt = 0; attempt < 20; attempt++) {
         const r = minR + Math.random() * Math.max(0.5, maxR - minR);
         let ang;
         if (preferSide && !orbital) {
-          // 70% pure flanks · 30% side-forward (diagonal) · almost never dead-ahead
+          // Prefer pure flanks — rarely dead-ahead (keeps camera/Bolt clear)
           const mode = Math.random();
           const sideSign = Math.random() > 0.5 ? 1 : -1;
-          if (mode < 0.45) {
+          if (mode < 0.55) {
             // pure left/right flank
-            ang = sideSign * (Math.PI * 0.5 + (Math.random() - 0.5) * 0.55);
-          } else if (mode < 0.85) {
-            // side-forward diagonal (~30–60° off heading)
-            ang = sideSign * (0.55 + Math.random() * 0.55);
+            ang = sideSign * (Math.PI * 0.5 + (Math.random() - 0.5) * 0.4);
+          } else if (mode < 0.9) {
+            // side-forward diagonal (~40–70° off heading)
+            ang = sideSign * (0.7 + Math.random() * 0.55);
           } else {
-            // soft side-back (behind flanks) so world fills around Bolt
-            ang = sideSign * (Math.PI * 0.55 + Math.random() * 0.5);
+            // soft side-back (behind flanks)
+            ang = sideSign * (Math.PI * 0.6 + Math.random() * 0.4);
           }
         } else {
           // Orbital: wide ring, avoid exact underfoot
@@ -3039,6 +4461,19 @@
         z += (Math.random() - 0.5) * jit;
 
         if (this._tooCloseToPlayer(x, z, clearR)) continue;
+        if (
+          blockCorridor &&
+          this._inRunCorridor(
+            x,
+            z,
+            yaw,
+            corridorHalf,
+            CLEAR.corridorAhead,
+            CLEAR.corridorBehind
+          )
+        ) {
+          continue;
+        }
         if (this._tooClose(x, z, stackMin)) continue;
         return { x: x, z: z };
       }
@@ -3121,19 +4556,22 @@
       if (this.detailCooldown > 0 && density < (orbital ? 0.4 : 0.55)) return false;
 
       const origin = playerPos || pred;
-      // Around Bolt, never underfoot — clear bubble ~6m on surface
+      // Details stay on flanks — well outside Bolt's bubble
       const placed = this._placeAround(origin, yaw, {
         orbital: orbital,
-        minR: orbital ? 22 : 11,
-        maxR: orbital ? 70 : 32,
+        minR: orbital ? 28 : CLEAR.detailMin,
+        maxR: orbital ? 80 : CLEAR.detailMax,
         preferSide: true,
-        clearR: orbital ? 18 : 10,
-        stackMin: orbital ? 12 : 2.8,
-        jitter: orbital ? 5 : 2,
+        clearR: orbital ? 24 : CLEAR.detailClear,
+        corridorHalf: orbital ? 0 : CLEAR.corridorHalf,
+        blockCorridor: !orbital,
+        stackMin: orbital ? 14 : 5,
+        jitter: orbital ? 5 : 2.2,
       });
       if (!placed) return false;
       const x = placed.x;
       const z = placed.z;
+      if (!orbital && this._tooCloseToPlayer(x, z, CLEAR.player)) return false;
 
       const surface = this.heightAt(x, z);
       const e = pool.acquire();
@@ -3207,61 +4645,148 @@
 
     /**
      * RuinGenerator — ancient modular landmarks ahead of Bolt
-     * Flat ground preferred · path-adjacent · complexity ↑ with score + Resonance
+     * coop: { forceGrove, preferTemple } — nest ruin in forest footprint (temple at grove edge)
      */
-    _spawnRuin(pred, yaw, density, biome, resonance, pool, playerPos) {
+    _spawnRuin(pred, yaw, density, biome, resonance, pool, playerPos, coop) {
+      coop = coop || null;
       if (pool.activeCount >= 14) return false;
-      if (this.ruinCooldown > 0) return false;
+      if (this.ruinCooldown > 0 && !(coop && coop.forceGrove)) return false;
 
       const st = this._scaleStage || "paw";
       const orbital =
         st === "orbital" || st === "solar" || st === "cosmic";
 
       const origin = playerPos || pred;
+      const kit = sceneKit(density, biome.id);
+      const scene =
+        !orbital &&
+        this._findSceneAhead(origin, yaw, {
+          maxDist: 110,
+          needRuin: !(coop && coop.forceGrove),
+        });
+      // Force: any forest ahead even if ruin already marked
+      const sceneForce =
+        !orbital &&
+        coop &&
+        coop.forceGrove &&
+        this._findSceneAhead(origin, yaw, { maxDist: 110, needRuin: false });
+      const useScene = sceneForce || scene;
 
-      // Ruins far on flanks / side-forward — never hide Bolt
-      const placed = this._placeAround(origin, yaw, {
-        orbital: orbital,
-        minR: orbital ? 120 : 85,
-        maxR: orbital ? 300 : 180,
-        preferSide: true,
-        clearR: orbital ? 100 : 75,
-        stackMin: orbital ? 95 : 80,
-        jitter: orbital ? 10 : 5,
-      });
-      if (!placed) return false;
-      const x = placed.x;
-      const z = placed.z;
+      let x;
+      let z;
+      let nestGrove = false;
+
+      // Nest ruin at forest edge — off run corridor, facing path into grove
+      if (useScene && !orbital) {
+        nestGrove = true;
+        const sfx = Math.sin(useScene.yaw);
+        const sfz = Math.cos(useScene.yaw);
+        const srx = Math.cos(useScene.yaw);
+        const srz = -Math.sin(useScene.yaw);
+        // Prefer edge of canopy (slightly inside radius) on a flank of the corridor
+        const side = Math.random() < 0.5 ? -1 : 1;
+        const edgeR = useScene.radius * (0.55 + Math.random() * 0.28);
+        const along = useScene.radius * (0.15 + Math.random() * 0.45); // toward far side of grove
+        const sideOff = side * (useScene.corridor * 1.15 + 4 + Math.random() * 5);
+        x = useScene.x + sfx * along + srx * sideOff;
+        z = useScene.z + sfz * along + srz * sideOff;
+        // Safety: not on Bolt, not in run lane
+        if (
+          this._tooCloseToPlayer(x, z, CLEAR.ruinNestPlayer) ||
+          this._inRunCorridor(
+            x,
+            z,
+            yaw,
+            CLEAR.corridorHalf,
+            CLEAR.corridorAhead,
+            CLEAR.corridorBehind
+          )
+        ) {
+          // Fall back to opposite flank
+          x = useScene.x + sfx * along - srx * sideOff;
+          z = useScene.z + sfz * along - srz * sideOff;
+          if (
+            this._tooCloseToPlayer(x, z, CLEAR.ruinNestPlayer) ||
+            this._inRunCorridor(
+              x,
+              z,
+              yaw,
+              CLEAR.corridorHalf,
+              CLEAR.corridorAhead,
+              CLEAR.corridorBehind
+            )
+          ) {
+            nestGrove = false;
+          }
+        }
+      }
+
+      if (!nestGrove) {
+        // Distant flank ruins (default) — never hide Bolt
+        const placed = this._placeAround(origin, yaw, {
+          orbital: orbital,
+          minR: orbital ? 120 : CLEAR.ruinDistantMin,
+          maxR: orbital ? 300 : 200,
+          preferSide: true,
+          clearR: orbital ? 100 : CLEAR.ruinDistantClear,
+          corridorHalf: orbital ? 0 : CLEAR.corridorHalf + 2,
+          blockCorridor: !orbital,
+          stackMin: orbital ? 95 : 80,
+          jitter: orbital ? 10 : 5,
+        });
+        if (!placed) return false;
+        x = placed.x;
+        z = placed.z;
+      }
 
       const surface = this.heightAt(x, z);
       if (!orbital) {
         const hN = this.heightAt(x + 4, z);
         const hE = this.heightAt(x, z + 4);
-        if (Math.abs(hN - surface) > 2.4 || Math.abs(hE - surface) > 2.4) return false;
+        if (Math.abs(hN - surface) > 2.8 || Math.abs(hE - surface) > 2.8) {
+          if (nestGrove) {
+            // Still place grove ruins on mild slopes
+          } else {
+            return false;
+          }
+        }
       }
 
       const e = pool.acquire();
       if (!e) return false;
 
-      // Orbital prefers stations / platforms / wrecks / temples
-      let typeDef = pickRuinType(density, biome.id, resonance);
-      if (orbital) {
+      // Grove nest: temple complexes · Orbital: stations · else default pick
+      let typeDef;
+      if (nestGrove) {
+        typeDef = pickGroveRuinType(density, biome.id, resonance, kit);
+        if (coop && coop.preferTemple && Math.random() < 0.75) {
+          typeDef = RUIN_TYPES.temple;
+        }
+      } else if (orbital) {
         const roll = Math.random();
         if (roll < 0.3) typeDef = RUIN_TYPES.platform;
         else if (roll < 0.5) typeDef = RUIN_TYPES.wreck;
         else if (roll < 0.7) typeDef = RUIN_TYPES.temple;
         else if (roll < 0.85) typeDef = RUIN_TYPES.tower;
         else typeDef = RUIN_TYPES.arch;
+      } else {
+        typeDef = pickRuinType(density, biome.id, resonance);
       }
       if (this.ruinTypeStats[typeDef.id] != null) this.ruinTypeStats[typeDef.id]++;
+
+      // Slight density boost for grove temples so modular layout is richer
+      const layoutDens = nestGrove
+        ? Math.min(1.35, density * 1.15 + 0.15)
+        : density;
 
       RuinGenerator.layout(e.mesh, {
         typeDef: typeDef,
         biome: biome,
-        density: density,
+        density: layoutDens,
         resonance: resonance || 0,
         seed: Math.random() * 200,
         orbital: orbital,
+        groveNest: nestGrove,
       });
 
       let y = surface;
@@ -3276,23 +4801,34 @@
       }
 
       const scale =
-        (orbital ? 3.6 : 2.4) +
-        density * (orbital ? 2.2 : 1.4) +
-        (typeDef.id === "temple" ? 1.4 : 0) +
+        (orbital ? 3.6 : nestGrove ? 2.2 : 2.4) +
+        density * (orbital ? 2.2 : nestGrove ? 1.15 : 1.4) +
+        (typeDef.id === "temple" ? nestGrove ? 1.15 : 1.4 : 0) +
         (typeDef.id === "monolith" || typeDef.id === "tower" ? 0.8 : 0);
-      const life = 20 + density * 14 + resonance * 6 + (orbital ? 10 : 0);
+      const life =
+        20 +
+        density * 14 +
+        resonance * 6 +
+        (orbital ? 10 : 0) +
+        (nestGrove ? 8 : 0);
 
       e.active = true;
       e.age = 0;
       e.life = life;
-      e.fade = 0.15;
+      e.fade = nestGrove ? 0.28 : 0.15;
       e.fadingOut = false;
       e.baseScale = scale;
       e.homeY = y;
       e.mesh.position.set(x, y, z);
-      e.mesh.rotation.y = yaw + (Math.random() - 0.5) * 0.9;
+      // Face toward forest center / run path so temple reads as grove landmark
+      if (nestGrove && useScene) {
+        e.mesh.rotation.y =
+          Math.atan2(useScene.x - x, useScene.z - z) + (Math.random() - 0.5) * 0.35;
+      } else {
+        e.mesh.rotation.y = yaw + (Math.random() - 0.5) * 0.9;
+      }
       if (orbital) e.mesh.rotation.z = (Math.random() - 0.5) * 0.35;
-      e.mesh.scale.setScalar(scale * 0.25);
+      e.mesh.scale.setScalar(scale * (nestGrove ? 0.32 : 0.25));
       e.mesh.visible = true;
       e.mesh.traverse((c) => {
         if (c.material) {
@@ -3300,18 +4836,26 @@
           mats.forEach((m) => {
             m.transparent = true;
             const base = m.userData.baseOpacity != null ? m.userData.baseOpacity : 1;
-            m.opacity = 0.15 * base;
+            m.opacity = (nestGrove ? 0.22 : 0.15) * base;
             m.depthWrite = false;
           });
         }
       });
       e.mesh.userData.kind = "ruin";
       e.mesh.userData.ruinType = typeDef.id;
+      e.mesh.userData.groveNest = nestGrove;
+      e.mesh.userData.sceneBand = useScene ? useScene.band : null;
+
+      if (useScene && nestGrove) {
+        useScene.ruinDone = true;
+      }
 
       this.ruinCooldown = orbital
         ? THREE.MathUtils.lerp(1.4, 0.45, Math.min(1, density + resonance * 0.3))
-        : THREE.MathUtils.lerp(1.6, 0.55, Math.min(1, density + resonance * 0.3)) +
-          Math.random() * 0.35;
+        : nestGrove
+          ? THREE.MathUtils.lerp(1.1, 0.45, Math.min(1, density)) + Math.random() * 0.25
+          : THREE.MathUtils.lerp(1.6, 0.55, Math.min(1, density + resonance * 0.3)) +
+            Math.random() * 0.35;
       if (resonance > 0.5) this.ruinCooldown *= 0.65;
 
       this._remember(x, z);
@@ -3323,6 +4867,145 @@
      * Active landmarks for Intention destinations (ruins, paths with energy)
      * Returns array of { x, y, z, kind, type, hasLoot, mesh, dist }
      */
+    /**
+     * Highest walkable structure top at (x,z) that the player can reach.
+     * playerY used so elevated platforms don't snap you from far below.
+     * Returns number or null.
+     */
+    sampleWalkTop(x, z, playerY) {
+      let best = null;
+      const py = playerY != null ? playerY : 1e9;
+      const stepUp = 2.6;
+      const dropOnto = 5.0;
+      const kinds = ["ruin", "terrain"];
+      for (let k = 0; k < kinds.length; k++) {
+        const pool = this.pools[kinds[k]];
+        if (!pool || !pool.live) continue;
+        for (let i = 0; i < pool.live.length; i++) {
+          const e = pool.live[i];
+          if (!e || !e.active || !e.mesh || !e.mesh.visible) continue;
+          if (e.fade < 0.45) continue;
+          const mp = e.mesh.position;
+          const dx = mp.x - x;
+          const dz = mp.z - z;
+          if (dx * dx + dz * dz > 55 * 55) continue;
+          const sc = e.mesh.scale.x || 1;
+          const ry = e.mesh.rotation.y || 0;
+          const cy = Math.cos(ry);
+          const sy = Math.sin(ry);
+          const walks = e.mesh.userData.walkColliders;
+          if (walks && walks.length) {
+            for (let w = 0; w < walks.length; w++) {
+              const c = walks[w];
+              const lx = (c.lx || 0) * sc;
+              const lz = (c.lz || 0) * sc;
+              const wx = mp.x + lx * cy - lz * sy;
+              const wz = mp.z + lx * sy + lz * cy;
+              const half = (c.half != null ? c.half : 2) * sc;
+              if (Math.abs(x - wx) > half || Math.abs(z - wz) > half) continue;
+              const top = mp.y + (c.top != null ? c.top : 0.5) * sc;
+              if (py + stepUp >= top && py - dropOnto <= top + 0.6) {
+                if (best == null || top > best) best = top;
+              }
+            }
+          } else {
+            // Fallback AABB top
+            if (!this._tmpBox) this._tmpBox = new THREE.Box3();
+            this._tmpBox.setFromObject(e.mesh);
+            const b = this._tmpBox;
+            if (x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z) continue;
+            const top = b.max.y;
+            if (py + stepUp >= top && py - dropOnto <= top + 0.6) {
+              if (best == null || top > best) best = top;
+            }
+          }
+        }
+      }
+      return best;
+    }
+
+    /**
+     * Push player out of solid structure walls. Mutates pos + returns impact info.
+     * pos: {x,y,z}, vel: THREE.Vector3 optional
+     */
+    resolveWallCollision(pos, radius, vel) {
+      radius = radius != null ? radius : 0.85;
+      let hit = null;
+      let impact = 0;
+      const kinds = ["ruin", "terrain"];
+      for (let k = 0; k < kinds.length; k++) {
+        const pool = this.pools[kinds[k]];
+        if (!pool || !pool.live) continue;
+        for (let i = 0; i < pool.live.length; i++) {
+          const e = pool.live[i];
+          if (!e || !e.active || !e.mesh || !e.mesh.visible) continue;
+          if (e.fade < 0.5) continue;
+          const mp = e.mesh.position;
+          const dx0 = mp.x - pos.x;
+          const dz0 = mp.z - pos.z;
+          if (dx0 * dx0 + dz0 * dz0 > 50 * 50) continue;
+          const sc = e.mesh.scale.x || 1;
+          const ry = e.mesh.rotation.y || 0;
+          const cy = Math.cos(ry);
+          const sy = Math.sin(ry);
+          const walls = e.mesh.userData.wallColliders;
+          if (!walls || !walls.length) continue;
+          for (let w = 0; w < walls.length; w++) {
+            const c = walls[w];
+            const lx = (c.lx || 0) * sc;
+            const lz = (c.lz || 0) * sc;
+            const wx = mp.x + lx * cy - lz * sy;
+            const wz = mp.z + lx * sy + lz * cy;
+            const y0 = mp.y + (c.y0 != null ? c.y0 : 0) * sc;
+            const y1 = mp.y + (c.y1 != null ? c.y1 : 2) * sc;
+            // Standing on top: skip wall push (handled by walk top)
+            if (pos.y >= y1 - 0.35) continue;
+            if (pos.y + 1.4 < y0 || pos.y > y1) continue;
+            const halfX = ((c.halfX != null ? c.halfX : c.half) || 1.2) * sc + radius;
+            const halfZ = ((c.halfZ != null ? c.halfZ : c.half) || 1.2) * sc + radius;
+            const dx = pos.x - wx;
+            const dz = pos.z - wz;
+            if (Math.abs(dx) > halfX || Math.abs(dz) > halfZ) continue;
+            // Push out along smallest penetration axis
+            const penX = halfX - Math.abs(dx);
+            const penZ = halfZ - Math.abs(dz);
+            let pushX = 0;
+            let pushZ = 0;
+            if (penX < penZ) {
+              pushX = (dx >= 0 ? 1 : -1) * penX;
+            } else {
+              pushZ = (dz >= 0 ? 1 : -1) * penZ;
+            }
+            pos.x += pushX;
+            pos.z += pushZ;
+            if (vel) {
+              // Kill velocity into the wall
+              if (pushX !== 0) {
+                if (pushX * vel.x < 0) {
+                  impact = Math.max(impact, Math.abs(vel.x));
+                  vel.x *= -0.15;
+                }
+              }
+              if (pushZ !== 0) {
+                if (pushZ * vel.z < 0) {
+                  impact = Math.max(impact, Math.abs(vel.z));
+                  vel.z *= -0.15;
+                }
+              }
+            }
+            hit = {
+              kind: kinds[k],
+              type:
+                (e.mesh.userData.ruinType || e.mesh.userData.terrainType || "solid"),
+              impact: impact,
+            };
+          }
+        }
+      }
+      if (hit) hit.impact = impact;
+      return hit;
+    }
+
     getLandmarks(playerPos) {
       const list = [];
       const px = playerPos.x;
@@ -3411,52 +5094,123 @@
     }
 
     /**
-     * VegetationGenerator — organic clusters near run line (noise forests + clearings)
-     * Avoids path center; flanks routes; density scales with sprint score.
+     * VegetationGenerator — clusters + multi-layer forest systems (high density bands).
+     * Avoids path center; flanks routes; density band drives scene kits.
      */
     _spawnVegetation(pred, yaw, density, biome, resonance, pool, playerPos) {
       // Vegetation doesn't make sense in orbit
       const st = this._scaleStage || "paw";
       if (st === "orbital" || st === "solar" || st === "cosmic") return false;
-      if (pool.activeCount >= 56) return false;
+      // Forests are heavy — cap active; leave room for single plants
+      if (pool.activeCount >= 64) return false;
       if (this.vegCooldown > 0) return false;
 
       const origin = playerPos || pred;
+      const kit = sceneKit(density, biome.id);
+      this._sceneBand = kit.band;
 
       // Noise field decides forest vs clearing
       const noiseSample = fbm(origin.x * 0.04 + this.stats.spawned * 0.1, origin.z * 0.04, 3);
       // Sparse biomes / clearings skip more often
-      const clearThresh = biome.id === "whisperStars" ? 0.42 : biome.id === "emberVoid" ? 0.28 : 0.22;
-      if (noiseSample < clearThresh && density < 0.7) {
+      const clearThresh =
+        biome.id === "whisperStars"
+          ? 0.42
+          : biome.id === "frostGlacier"
+            ? 0.38
+            : biome.id === "emberVoid"
+              ? 0.28
+              : 0.22;
+      if (noiseSample < clearThresh && density < 0.7 && kit.band !== "veryHigh") {
         this.vegCooldown = 0.15;
         return false;
       }
 
-      const typeDef = pickVegType(density, biome.id, noiseSample);
+      // High / very-high (+ some medium groves): spawn full forest systems
+      let typeDef;
+      const wantForest =
+        kit.preferForest &&
+        Math.random() < kit.forestChance &&
+        noiseSample > clearThresh * 0.75;
+      if (wantForest) {
+        typeDef = VEG_TYPES.forest;
+      } else {
+        typeDef = pickVegType(density, biome.id, noiseSample);
+      }
+
+      const isForest = typeDef.id === "forest";
       const isBig =
+        isForest ||
         typeDef.id === "tree" ||
         typeDef.id === "megaTree" ||
         typeDef.id === "spire" ||
         typeDef.id === "canopy";
 
-      // Flora on sides + side-forward only — clear sprint corridor
+      // Cap concurrent forests so pools stay healthy
+      if (isForest) {
+        let forestLive = 0;
+        for (let i = 0; i < pool.live.length; i++) {
+          const ae = pool.live[i];
+          if (ae && ae.mesh && ae.mesh.userData && ae.mesh.userData.vegType === "forest") {
+            forestLive++;
+          }
+        }
+        const forestCap = kit.band === "veryHigh" ? 6 : kit.band === "high" ? 5 : 3;
+        if (forestLive >= forestCap) {
+          typeDef = pickVegType(density, biome.id, noiseSample);
+        }
+      }
+      const isForestFinal = typeDef.id === "forest";
+
+      // Forests far enough that their outer trees don't reach Bolt
+      const forestR = kit.forestRadius || 16;
+      const forestMinR = Math.max(
+        CLEAR.forestMin,
+        CLEAR.forestClear + forestR * 0.95
+      );
       const placed = this._placeAround(origin, yaw, {
         orbital: false,
-        minR: isBig ? 22 : 12,
-        maxR: isBig ? 55 + density * 14 : 36 + density * 10,
+        minR: isForestFinal
+          ? forestMinR
+          : isBig
+            ? CLEAR.vegBigMin
+            : CLEAR.vegMin,
+        maxR: isForestFinal
+          ? Math.max(CLEAR.forestMax, forestMinR + 25) + density * 20
+          : isBig
+            ? 70 + density * 14
+            : CLEAR.detailMax + density * 12,
         preferSide: true,
-        clearR: isBig ? 20 : 11,
-        stackMin: isBig ? 16 : 4.2,
-        jitter: 2.6,
+        clearR: isForestFinal
+          ? forestMinR
+          : isBig
+            ? CLEAR.vegBigClear
+            : CLEAR.vegClear,
+        corridorHalf: isForestFinal ? CLEAR.corridorHalf + 4 : CLEAR.corridorHalf,
+        blockCorridor: true,
+        stackMin: isForestFinal ? 30 + forestR * 0.3 : isBig ? 20 : 8,
+        jitter: isForestFinal ? 4 : 2.4,
       });
       if (!placed) return false;
+      if (
+        this._tooCloseToPlayer(placed.x, placed.z, CLEAR.player) ||
+        this._inRunCorridor(
+          placed.x,
+          placed.z,
+          yaw,
+          CLEAR.corridorHalf,
+          CLEAR.corridorAhead,
+          CLEAR.corridorBehind
+        )
+      ) {
+        return false;
+      }
       const x = placed.x;
       const z = placed.z;
 
       const surface = this.heightAt(x, z);
       // Simple slope check — skip very steep (height delta nearby)
       const h2 = this.heightAt(x + 1.5, z + 1.5);
-      if (Math.abs(h2 - surface) > 2.8) return false;
+      if (Math.abs(h2 - surface) > (isForestFinal ? 3.4 : 2.8)) return false;
 
       const e = pool.acquire();
       if (!e) return false;
@@ -3469,24 +5223,31 @@
         density: density,
         resonance: resonance || 0,
         seed: noiseSample * 100 + Math.random() * 50,
+        sceneKit: kit,
       });
 
-      let scale = 0.9 + density * 0.55 + (biome.id === "crystalNebula" ? 0.1 : 0);
-      if (typeDef.id === "megaTree") scale *= 1.55;
+      let scale =
+        (0.9 + density * 0.55 + (biome.id === "crystalNebula" ? 0.1 : 0)) *
+        (kit.scaleMul || 1);
+      if (typeDef.id === "forest") scale *= 1.0;
+      else if (typeDef.id === "megaTree") scale *= 1.55;
       else if (typeDef.id === "tree") scale *= 1.3;
       else if (typeDef.id === "spire" || typeDef.id === "canopy") scale *= 1.2;
-      const life = 11 + density * 12 + resonance * 4 + Math.random() * 4;
+      const life =
+        (11 + density * 12 + (resonance || 0) * 4 + Math.random() * 4) *
+        (isForestFinal ? kit.lifeMul || 1.4 : 1);
 
       e.active = true;
       e.age = 0;
       e.life = life;
-      e.fade = 0.25;
+      e.fade = isForestFinal ? 0.4 : 0.25;
       e.fadingOut = false;
       e.baseScale = scale;
       e.homeY = surface;
       e.mesh.position.set(x, surface, z);
-      e.mesh.rotation.y = Math.random() * Math.PI * 2;
-      e.mesh.scale.setScalar(scale * 0.35);
+      // Forests align corridor to run yaw so paths can thread them
+      e.mesh.rotation.y = isForestFinal ? yaw : Math.random() * Math.PI * 2;
+      e.mesh.scale.setScalar(scale * (isForestFinal ? 0.42 : 0.35));
       e.mesh.visible = true;
       e.mesh.traverse((c) => {
         if (c.material) {
@@ -3501,11 +5262,49 @@
       });
       e.mesh.userData.kind = "vegetation";
       e.mesh.userData.vegType = typeDef.id;
+      e.mesh.userData.forest = isForestFinal;
+      e.mesh.userData.sceneBand = kit.band;
 
-      // Fast respawn — dense living world on flanks
-      this.vegCooldown = THREE.MathUtils.lerp(0.2, 0.05, Math.min(1, density)) + Math.random() * 0.05;
-      if (density > 0.35 && Math.random() < 0.55) {
-        this.vegCooldown *= 0.4;
+      // Forests: slower respawn (each is a whole system); singles stay snappy
+      if (isForestFinal) {
+        this.vegCooldown =
+          THREE.MathUtils.lerp(0.55, 0.22, Math.min(1, density)) + Math.random() * 0.12;
+        // Still allow a few more plants between forest blocks
+        if (density > 0.7 && Math.random() < 0.35) this.vegCooldown *= 0.55;
+        if (this._forestToastT <= 0 && density >= 0.55) {
+          const names = {
+            crystalNebula: "CRYSTAL GROVE RISES",
+            emberVoid: "EMBER FOREST IGNITES",
+            whisperStars: "STARLIT GROVE WHISPERS",
+            jadeCanopy: "JADE CANOPY UNFURLS",
+            solarGold: "GOLDEN WOODLAND FORMS",
+            frostGlacier: "ICE SPIRE GROVE FORMS",
+            rosePulse: "ROSE GARDEN BLOOMS",
+          };
+          const label = names[biome.id] || "THE FOREST WAKES";
+          this.toastFn(label + " — the biome answers your sprint");
+          this._forestToastT = 14;
+        }
+        // Register footprint so path + terrain co-author this scene
+        this._registerSceneFootprint({
+          kind: "forest",
+          x: x,
+          z: z,
+          radius: kit.forestRadius || 16,
+          yaw: yaw,
+          corridor: kit.corridor || 3.4,
+          band: kit.band,
+          biomeId: biome.id,
+          maxAge: 18 + density * 10,
+        });
+        // Immediate co-op: path through + landmark flanks
+        this._coopComposeScene(pred, yaw, density, biome, resonance || 0, playerPos);
+      } else {
+        this.vegCooldown =
+          THREE.MathUtils.lerp(0.2, 0.05, Math.min(1, density)) + Math.random() * 0.05;
+        if (density > 0.35 && Math.random() < 0.55) {
+          this.vegCooldown *= 0.4;
+        }
       }
 
       this._remember(x, z);
@@ -3514,29 +5313,211 @@
     }
 
     /**
-     * TerrainFeatureGenerator — solid landscape near / ahead of Bolt
+     * After a forest rises, compose path + terrain flanks + nested grove ruin (temple).
      */
-    _spawnTerrain(pred, yaw, density, biome, resonance, pool, playerPos) {
+    _coopComposeScene(pred, yaw, density, biome, resonance, playerPos) {
+      const kit = sceneKit(density, biome.id);
+      // Always open a path first — Bolt must keep a run lane
+      const savedPathCd = this.pathCooldown;
+      const savedTerrCd = this.terrainCooldown;
+      const savedRuinCd = this.ruinCooldown;
+      this.pathCooldown = 0;
+      this.terrainCooldown = 0;
+      this.ruinCooldown = 0;
+      // Path through scene (or plain forward corridor)
+      this._spawnPath(pred, yaw, density, biome, resonance, this.pools.path, playerPos, {
+        forceThroughScene: !!kit.pathThroughForest,
+        forceLane: true,
+      });
+      // One landmark max per compose — walls are flanks, not piles on Bolt
+      if (
+        kit.preferLandmark &&
+        this._countLandmarks() < 4 &&
+        Math.random() < Math.min(0.45, kit.landmarkChance * 0.5)
+      ) {
+        this._spawnTerrain(pred, yaw, density, biome, resonance, this.pools.terrain, playerPos, {
+          forceLandmark: true,
+        });
+      }
+      // Optional second wall only at very high, and only if first landed
+      if (
+        kit.band === "veryHigh" &&
+        this._countLandmarks() < 5 &&
+        Math.random() < 0.35
+      ) {
+        this.terrainCooldown = 0;
+        this._spawnTerrain(pred, yaw, density, biome, resonance, this.pools.terrain, playerPos, {
+          forceLandmark: true,
+          preferCanyon: true,
+        });
+      }
+      // Nested grove ruin — temple / arch / monolith at forest edge
+      let nestedRuin = false;
+      if (
+        kit.preferGroveRuin &&
+        Math.random() < (kit.groveRuinChance || 0.6)
+      ) {
+        nestedRuin = this._spawnRuin(
+          pred,
+          yaw,
+          density,
+          biome,
+          resonance,
+          this.pools.ruin,
+          playerPos,
+          {
+            forceGrove: true,
+            preferTemple:
+              Math.random() < (kit.groveTempleChance || 0.45) ||
+              biome.id === "crystalNebula",
+          }
+        );
+      }
+      // Very high: chance of second smaller ruin piece (arch gateway)
+      if (kit.band === "veryHigh" && nestedRuin && Math.random() < 0.4) {
+        this.ruinCooldown = 0;
+        this._spawnRuin(pred, yaw, density * 0.9, biome, resonance, this.pools.ruin, playerPos, {
+          forceGrove: true,
+          preferTemple: false,
+        });
+      }
+
+      this.pathCooldown = Math.min(savedPathCd, 0.25);
+      this.terrainCooldown = Math.max(0.55, Math.min(savedTerrCd, 0.7));
+      this.ruinCooldown = Math.max(0.4, Math.min(savedRuinCd, 0.8));
+
+      if (this._coopToastT <= 0 && density >= 0.55) {
+        if (nestedRuin) {
+          const labels = {
+            crystalNebula: "CRYSTAL FOREST RUIN — temple in the grove 🏛️",
+            emberVoid: "ASH GROVE WRECK — ruin in the firewood 🔥",
+            whisperStars: "STARLIT SANCTUM — monolith in the grove ✨",
+            jadeCanopy: "JADE SHRINE — ruin under the canopy 🌿",
+            frostGlacier: "ICE SANCTUM — ruin in the spires ❄️",
+            solarGold: "GOLDEN RELIC — ruin in the wood ☀️",
+            rosePulse: "ROSE TEMPLE — ruin in the garden 🌸",
+          };
+          this.toastFn(
+            labels[biome.id] || "GROVE RUIN NESTS — the forest keeps a secret 🏛️"
+          );
+        } else {
+          this.toastFn("SCENE COMPOSES — path · forest · landform 🌌");
+        }
+        this._coopToastT = 16;
+      }
+    }
+
+    /**
+     * TerrainFeatureGenerator — solid landscape near / ahead of Bolt
+     * coop: { forceLandmark, preferCanyon } — co-author with forest footprints
+     */
+    _spawnTerrain(pred, yaw, density, biome, resonance, pool, playerPos, coop) {
+      coop = coop || null;
       const st = this._scaleStage || "paw";
       const orbital = st === "orbital" || st === "solar" || st === "cosmic";
-      if (pool.activeCount >= (orbital ? 12 : 22)) return false;
+      // Harder cap — rocks were burying Bolt at VERYHIGH
+      if (pool.activeCount >= (orbital ? 12 : 16)) return false;
       if (this.terrainCooldown > 0) return false;
 
       const origin = playerPos || pred;
+      const kit = sceneKit(density, biome.id);
+      const landmarkLive = this._countLandmarks();
+      const landmarkCap = kit.band === "veryHigh" ? 5 : kit.band === "high" ? 4 : 2;
+      const scene =
+        !orbital &&
+        this._findSceneAhead(origin, yaw, {
+          maxDist: 95,
+          needTerrain: true,
+        });
 
-      // Rocks/ridges on flanks — never under Bolt
-      const placed = this._placeAround(origin, yaw, {
-        orbital: orbital,
-        minR: orbital ? 28 : 16,
-        maxR: orbital ? 80 : 40,
-        preferSide: true,
-        clearR: orbital ? 24 : 14,
-        stackMin: orbital ? 18 : 9,
-        jitter: orbital ? 5 : 2.5,
-      });
-      if (!placed) return false;
-      const x = placed.x;
-      const z = placed.z;
+      let x;
+      let z;
+      let sideSign = Math.random() < 0.5 ? -1 : 1;
+      let isLandmark = false;
+
+      // Co-author: place landmark on flank of nearest forest (far from Bolt)
+      if (
+        !orbital &&
+        scene &&
+        landmarkLive < landmarkCap &&
+        (coop && coop.forceLandmark ||
+          (kit.preferLandmark && Math.random() < kit.landmarkChance * 0.55))
+      ) {
+        isLandmark = true;
+        const sfx = Math.sin(scene.yaw);
+        const sfz = Math.cos(scene.yaw);
+        const srx = Math.cos(scene.yaw);
+        const srz = -Math.sin(scene.yaw);
+        if (scene.terrainDone === 0) {
+          sideSign = Math.random() < 0.5 ? -1 : 1;
+          scene.sideSign = sideSign;
+        } else {
+          sideSign = -(scene.sideSign != null ? scene.sideSign : 1);
+        }
+        // Far wall offset so canyon never sits on Bolt
+        const edge = scene.radius * 0.85 + scene.corridor * 1.8 + 10;
+        const along = (Math.random() - 0.5) * scene.radius * 0.3;
+        x = scene.x + srx * sideSign * edge + sfx * along;
+        z = scene.z + srz * sideSign * edge + sfz * along;
+        // Must be far from Bolt and outside run corridor
+        if (
+          this._tooCloseToPlayer(x, z, CLEAR.landmarkPlayer) ||
+          this._inRunCorridor(
+            x,
+            z,
+            yaw,
+            CLEAR.corridorHalf + 2,
+            CLEAR.corridorAhead,
+            CLEAR.corridorBehind
+          )
+        ) {
+          isLandmark = false;
+        }
+      }
+
+      if (!isLandmark) {
+        // Rocks/ridges on flanks — wide bubble, never in run corridor
+        const placed = this._placeAround(origin, yaw, {
+          orbital: orbital,
+          minR: orbital ? 32 : CLEAR.terrainMin,
+          maxR: orbital ? 90 : CLEAR.terrainMax + density * 12,
+          preferSide: true,
+          clearR: orbital ? 28 : CLEAR.terrainClear,
+          corridorHalf: orbital ? 0 : CLEAR.corridorHalf + 2,
+          blockCorridor: !orbital,
+          stackMin: orbital ? 20 : 14,
+          jitter: orbital ? 5 : 2.4,
+        });
+        if (!placed) return false;
+        x = placed.x;
+        z = placed.z;
+        // High band landmarks only if under cap and far enough
+        if (
+          !orbital &&
+          landmarkLive < landmarkCap &&
+          kit.preferLandmark &&
+          Math.random() < kit.landmarkChance * 0.28
+        ) {
+          isLandmark = true;
+        }
+      }
+
+      // Final safety: never place rock near Bolt
+      if (!orbital && this._tooCloseToPlayer(x, z, CLEAR.player)) return false;
+      if (
+        !orbital &&
+        this._inRunCorridor(
+          x,
+          z,
+          yaw,
+          CLEAR.corridorHalf,
+          CLEAR.corridorAhead,
+          CLEAR.corridorBehind
+        )
+      ) {
+        return false;
+      }
+
       const surface = this.heightAt(x, z);
 
       const e = pool.acquire();
@@ -3549,15 +5530,23 @@
         if (roll < 0.55) typeDef = TERRAIN_TYPES.floater;
         else if (roll < 0.85) typeDef = TERRAIN_TYPES.boulders;
         else typeDef = TERRAIN_TYPES.crater;
+        isLandmark = false;
+      } else if (isLandmark || (coop && coop.forceLandmark)) {
+        typeDef = pickLandmarkType(density, biome.id, {
+          canyonChance: coop && coop.preferCanyon ? 0.85 : kit.canyonChance,
+        });
+        isLandmark = true;
       }
       if (this.terrainTypeStats[typeDef.id] != null) this.terrainTypeStats[typeDef.id]++;
 
       TerrainFeatureGenerator.layout(e.mesh, {
         typeDef: typeDef,
         biome: biome,
-        density: density * (orbital ? 1.25 : 1),
+        density: density * (orbital ? 1.25 : isLandmark ? 1.15 : 1),
         seed: Math.random() * 100,
         orbital: orbital,
+        landmarkScale: kit.landmarkScale || 1,
+        sideSign: sideSign,
       });
 
       let y = surface;
@@ -3567,8 +5556,15 @@
       }
       const scale = orbital
         ? 2.4 + density * 1.6
-        : 1.0 + density * 0.35;
-      const life = 14 + density * 10 + resonance * 3 + (orbital ? 8 : 0);
+        : isLandmark
+          ? 1.15 + density * 0.55
+          : 1.0 + density * 0.35;
+      const life =
+        14 +
+        density * 10 +
+        resonance * 3 +
+        (orbital ? 8 : 0) +
+        (isLandmark ? 6 : 0);
 
       e.active = true;
       e.age = 0;
@@ -3578,12 +5574,15 @@
       e.baseScale = scale;
       e.homeY = y;
       e.mesh.position.set(x, y, z);
-      e.mesh.rotation.y = yaw + (Math.random() - 0.5) * 0.8;
+      // Landmarks align to scene / run yaw so walls frame the corridor
+      e.mesh.rotation.y = isLandmark
+        ? (scene ? scene.yaw : yaw) + (Math.random() - 0.5) * 0.12
+        : yaw + (Math.random() - 0.5) * 0.8;
       if (orbital) {
         e.mesh.rotation.x = (Math.random() - 0.5) * 0.6;
         e.mesh.rotation.z = (Math.random() - 0.5) * 0.6;
       }
-      e.mesh.scale.setScalar(scale * (orbital ? 0.55 : 0.4));
+      e.mesh.scale.setScalar(scale * (orbital ? 0.55 : isLandmark ? 0.55 : 0.4));
       e.mesh.visible = true;
       e.mesh.traverse((c) => {
         if (c.material) {
@@ -3598,19 +5597,28 @@
       });
       e.mesh.userData.kind = "terrain";
       e.mesh.userData.terrainType = typeDef.id;
+      e.mesh.userData.landmark = isLandmark;
+
+      if (scene && isLandmark) {
+        scene.terrainDone = (scene.terrainDone || 0) + 1;
+      }
 
       this.terrainCooldown = orbital
         ? 0.9 + Math.random() * 0.5
-        : 0.45 + Math.random() * 0.35 - density * 0.15;
+        : isLandmark
+          ? 0.85 + Math.random() * 0.45
+          : 0.7 + Math.random() * 0.4 - density * 0.1;
       this._remember(x, z);
       this.stats.spawned++;
       return true;
     }
 
     /**
-     * PathGenerator — starts ahead of Bolt (never underfoot), in frame while sprinting
+     * PathGenerator — starts ahead of Bolt; routes through forest scenes when available
+     * coop: { forceThroughScene }
      */
-    _spawnPath(pred, yaw, density, biome, resonance, pool, playerPos) {
+    _spawnPath(pred, yaw, density, biome, resonance, pool, playerPos, coop) {
+      coop = coop || null;
       if (pool.activeCount >= MAX_LIVE_PATHS) return false;
       if (this.pathCooldown > 0) return false;
 
@@ -3624,16 +5632,68 @@
       const rz = -Math.sin(yaw);
 
       const origin = playerPos || pred;
-      // Path always starts IN FRONT of Bolt so he runs into a glowing corridor
-      const minAhead = orbital ? 22 : 10;
-      const maxAhead = orbital ? 75 : 22;
-      const ahead = minAhead + Math.random() * (maxAhead - minAhead);
-      // Tiny side offset only — path stays centered on run line
-      const side = (Math.random() - 0.5) * (orbital ? 14 : 2.2);
-      let x = origin.x + fx * ahead + rx * side;
-      let z = origin.z + fz * ahead + rz * side;
-      // Never start under Bolt's feet
-      if (this._tooCloseToPlayer(x, z, orbital ? 18 : 8)) return false;
+      const kit = sceneKit(density, biome.id);
+      const scene =
+        !orbital &&
+        kit.pathThroughForest &&
+        this._findSceneAhead(origin, yaw, {
+          maxDist: 100,
+          needPath: !(coop && coop.forceThroughScene),
+        });
+      // forceThroughScene: prefer any forest ahead even if path already done
+      const sceneForce =
+        !orbital &&
+        coop &&
+        coop.forceThroughScene &&
+        this._findSceneAhead(origin, yaw, { maxDist: 100, needPath: false });
+
+      const useScene = sceneForce || scene;
+      let pathGuide = null;
+      let x;
+      let z;
+      let pathYaw = yaw;
+
+      if (useScene && !orbital) {
+        // Start just before forest, aim through its center
+        const sfx = Math.sin(useScene.yaw);
+        const sfz = Math.cos(useScene.yaw);
+        const approach = useScene.radius * 0.85 + 8;
+        x = useScene.x - sfx * approach;
+        z = useScene.z - sfz * approach;
+        // Nudge start toward Bolt if forest is side-biased
+        const blend = 0.35;
+        x = x * (1 - blend) + (origin.x + fx * 12) * blend;
+        z = z * (1 - blend) + (origin.z + fz * 12) * blend;
+        pathYaw = useScene.yaw;
+        pathGuide = {
+          targetX: useScene.x + sfx * useScene.radius * 0.35,
+          targetZ: useScene.z + sfz * useScene.radius * 0.35,
+          throughForest: true,
+          stick: 0.72,
+          lengthMul: (kit.pathLengthMul || 1.4) * (1 + useScene.radius / 40),
+          widthMul: kit.pathWidthMul || 1.15,
+        };
+      } else {
+        // Path always starts IN FRONT of Bolt so he runs into a glowing corridor
+        const minAhead = orbital ? 22 : 14;
+        const maxAhead = orbital ? 75 : 28 + density * 12;
+        const ahead = minAhead + Math.random() * (maxAhead - minAhead);
+        // Tiny side offset only — path stays centered on run line
+        const side = (Math.random() - 0.5) * (orbital ? 14 : 2.2);
+        x = origin.x + fx * ahead + rx * side;
+        z = origin.z + fz * ahead + rz * side;
+        if (!orbital && density > 0.55) {
+          pathGuide = {
+            throughForest: false,
+            stick: 0.5,
+            lengthMul: kit.pathLengthMul || 1,
+            widthMul: kit.pathWidthMul || 1,
+          };
+        }
+      }
+
+      // Paths may start relatively near — they ARE the lane (not clutter)
+      if (this._tooCloseToPlayer(x, z, orbital ? 16 : 8)) return false;
       if (this._tooClose(x, z, orbital ? 14 : 7)) return false;
 
       const surface = this.heightAt(x, z);
@@ -3647,19 +5707,31 @@
       const e = pool.acquire();
       if (!e) return false;
 
-      // Subtle guide paths — energy preferred, keep thin
+      // Prefer energy lanes — clear readable path for Bolt
       let typeDef = pickPathType(density, biome.id, resonance);
-      if (orbital || Math.random() < 0.55) typeDef = PATH_TYPES.energy;
+      const forceLane = !!(coop && (coop.forceLane || coop.forceThroughScene));
+      if (orbital || forceLane || Math.random() < 0.7) typeDef = PATH_TYPES.energy;
       else if (Math.random() < 0.35) typeDef = PATH_TYPES.branch;
       else if (Math.random() < 0.45) typeDef = PATH_TYPES.shortcut;
-      // Surface: longer but thin + soft (not highway)
-      if (!orbital) {
+      // Forest corridors / forced lanes: bright energy highway
+      if ((useScene || forceLane) && !orbital) {
+        typeDef = Object.assign({}, PATH_TYPES.energy, {
+          length: (PATH_TYPES.energy.length || 28) * (1.5 + density * 0.55) * (kit.pathLengthMul || 1),
+          segs: Math.min(30, (PATH_TYPES.energy.segs || 12) + 12),
+          width: (PATH_TYPES.energy.width || 0.55) * 1.15,
+          emissive: 1.25,
+          opacity: 0.82,
+          glow: true,
+          pulse: true,
+          curve: useScene ? 0.16 : 0.12,
+        });
+      } else if (!orbital) {
         typeDef = Object.assign({}, typeDef, {
-          length: (typeDef.length || 28) * (1.15 + density * 0.35),
-          segs: Math.min(20, (typeDef.segs || 12) + 5),
-          width: (typeDef.width || 0.55) * 0.9,
-          emissive: (typeDef.emissive || 1.0) * 0.85,
-          opacity: Math.min(0.7, (typeDef.opacity || 0.65)),
+          length: (typeDef.length || 28) * (1.2 + density * 0.4) * (kit.pathLengthMul || 1),
+          segs: Math.min(24, (typeDef.segs || 12) + 5 + (density > 0.6 ? 4 : 0)),
+          width: (typeDef.width || 0.55) * (kit.pathWidthMul || 1),
+          emissive: (typeDef.emissive || 1.0) * 0.95,
+          opacity: Math.min(0.78, (typeDef.opacity || 0.65) + 0.1),
           glow: true,
           pulse: true,
         });
@@ -3691,12 +5763,19 @@
         density: Math.max(0.5, density) * (orbital ? 1.45 : 1),
         heightAt: heightFn,
         start: start,
-        yaw: yaw + (Math.random() - 0.5) * (orbital ? 0.55 : 0.08),
+        yaw:
+          pathYaw +
+          (Math.random() - 0.5) * (orbital ? 0.55 : useScene ? 0.04 : 0.08),
         seed: Math.random() * 200,
         orbital: orbital,
+        guide: pathGuide,
       });
 
-      const life = 14 + density * 6 + (orbital ? 12 : 0);
+      if (useScene) {
+        useScene.pathDone = true;
+      }
+
+      const life = 14 + density * 6 + (orbital ? 12 : 0) + (useScene ? 5 : 0);
       e.active = true;
       e.age = 0;
       e.life = life;
@@ -3708,6 +5787,7 @@
       e.mesh.rotation.set(0, 0, 0);
       e.mesh.scale.setScalar(1);
       e.mesh.visible = true;
+      e.mesh.userData.throughForest = !!useScene;
       e.mesh.traverse((c) => {
         if (c.material) {
           const mats = Array.isArray(c.material) ? c.material : [c.material];
@@ -3723,9 +5803,10 @@
       e.mesh.userData.pathType = typeDef.id;
       e.mesh.userData.isPathEntity = true;
 
+      // Keep paths refreshing often so Bolt always has a lane
       this.pathCooldown = orbital
         ? 0.35 + Math.random() * 0.25
-        : 0.4 + Math.random() * 0.25;
+        : 0.22 + Math.random() * 0.14;
       this._remember(x, z);
       this.stats.spawned++;
       return true;
@@ -3737,6 +5818,9 @@
     update(dt, packet, playerPos, yaw) {
       // Decay flux boost
       this._fluxBoost = Math.max(0, this._fluxBoost - dt * 0.35);
+      this._forestToastT = Math.max(0, (this._forestToastT || 0) - dt);
+      this._coopToastT = Math.max(0, (this._coopToastT || 0) - dt);
+      this._tickSceneFootprints(dt);
       this._lastPlayerPos = playerPos;
 
       const score = this.scoreSys.update(packet, dt);
@@ -3763,7 +5847,7 @@
 
       let active = 0;
       Object.keys(this.pools).forEach((k) => {
-        this.pools[k].update(dt, this.scoreSys.active);
+        this.pools[k].update(dt, this.scoreSys.active, playerPos);
         active += this.pools[k].activeCount;
       });
       this.stats.active = active;
@@ -3778,14 +5862,14 @@
       const tp = packet.transitionProgress != null ? packet.transitionProgress : 0;
       // Surface = anything not true orbital/solar/cosmic (ground stay-dense path)
       const surfaceScale = !orbital;
-      // Don't starve surface density — densScale only bites hard in true ascent
+      // Surface density: keep rich but not rock-flooded
       let densScale = sc.densityMul != null ? sc.densityMul : 1;
-      if (surfaceScale) densScale = Math.max(1.15, densScale);
+      if (surfaceScale) densScale = Math.max(1.0, Math.min(1.2, densScale));
       let density = this.scoreSys.density;
       density = THREE.MathUtils.clamp(
-        (density + this._fluxBoost * 0.45 + res * 0.15 + coreMul) * densScale,
+        (density + this._fluxBoost * 0.35 + res * 0.12 + coreMul * 0.85) * densScale,
         0,
-        surfaceScale ? 1.55 : 1.45
+        surfaceScale ? 1.25 : 1.45
       );
       this._coreWorldMul = coreMul;
 
@@ -3795,13 +5879,13 @@
       let mVeg = sc.vegMul != null ? sc.vegMul : 1;
       let mRuin = sc.ruinMul != null ? sc.ruinMul : 1;
       let mDet = sc.detailMul != null ? sc.detailMul : 1;
-      // HARD floors on surface — dense living world around Bolt
+      // Surface floors — path always strong; terrain kept milder so Bolt stays visible
       if (surfaceScale) {
-        mVeg = Math.max(1.55, mVeg);
-        mDet = Math.max(1.35, mDet);
-        mTerr = Math.max(1.1, mTerr);
-        mPath = Math.max(1.45, mPath); // always paint a corridor ahead
-        mRuin = Math.max(1.15, mRuin);
+        mVeg = Math.max(1.25, mVeg);
+        mDet = Math.max(1.1, mDet);
+        mTerr = Math.min(mTerr, 0.85); // never amplify rock spam
+        mPath = Math.max(1.65, mPath); // always paint a corridor ahead
+        mRuin = Math.max(1.0, mRuin);
       }
       // Orbital: force veg off, boost ruin/path priority
       if (orbital) {
@@ -3873,55 +5957,93 @@
         }
         this.cooldown = THREE.MathUtils.lerp(0.48, 0.22, Math.min(1, density));
       } else {
-        // --- SURFACE: dense flora + far ruins + glowing path always ahead ---
-        // PATH first — beautiful corridor painted in front of Bolt every tick possible
+        // --- SURFACE: path corridor first, then flanks (never bury Bolt) ---
+        // PATH always — clear glowing lane so Bolt is never trapped in rocks
         if (mPath > 0.05) {
-          const pathCap = 4;
+          const pathCap = 5;
+          // Force lane if none or only one path live
           if (this.pools.path.activeCount < 2) {
-            // Force at least one path ahead when none live
-            if (this._spawnOne("path", pred, yaw, Math.min(1.35, d * mPath + 0.2), biome, res)) any = true;
+            this.pathCooldown = 0;
+            if (
+              this._spawnPath(
+                pred,
+                yaw,
+                Math.min(1.4, d * mPath + 0.25),
+                biome,
+                res,
+                this.pools.path,
+                playerPos,
+                { forceLane: true }
+              )
+            ) {
+              any = true;
+            }
           }
           if (
             this.pools.path.activeCount < pathCap ||
-            Math.random() < (0.85 + coreMul * 0.2) * mPath
+            Math.random() < (0.9 + coreMul * 0.15) * mPath
           ) {
             if (this._spawnOne("path", pred, yaw, Math.min(1.35, d * mPath), biome, res)) any = true;
           }
-          // Second lane / branch feel at high density
-          if (density > 0.4 && Math.random() < 0.55 * mPath) {
-            if (this._spawnOne("path", pred, yaw, d * mPath, biome, res)) any = true;
+          // Extra forward lane at high density (through forests if available)
+          if (density > 0.45 && Math.random() < 0.5 * mPath) {
+            if (
+              this._spawnPath(pred, yaw, d * mPath, biome, res, this.pools.path, playerPos, {
+                forceLane: true,
+              })
+            ) {
+              any = true;
+            }
           }
         }
-        // Terrain
-        if (mTerr > 0.08 && (this.pools.terrain.activeCount < 16 * mTerr || Math.random() < (0.75 + density * 0.25) * mTerr)) {
+        // Terrain — throttled; only flanks, capped
+        if (
+          mTerr > 0.08 &&
+          this.pools.terrain.activeCount < 12 &&
+          Math.random() < (0.35 + density * 0.2) * mTerr
+        ) {
           if (this._spawnOne("terrain", pred, yaw, d * mTerr, biome, res)) any = true;
         }
-        // Vegetation — DENSE forest bands around Bolt (never on him)
+        // Vegetation — forests on flanks (corridor blocked in _placeAround)
         if (mVeg > 0.05) {
           const vegChance =
-            (0.95 + density * 0.55 + (biome.weights.vegetation || 0.2) * 0.55 + coreMul * 0.35) * mVeg;
-          const vegCap = Math.floor((28 + coreMul * 16) * mVeg);
-          // Multiple flora spawns per tick for dense variety
-          const vegBursts = 2 + Math.floor(density * 3 + coreMul * 2);
+            (0.75 + density * 0.4 + (biome.weights.vegetation || 0.2) * 0.45 + coreMul * 0.25) * mVeg;
+          const vegCap = Math.floor((22 + coreMul * 10) * Math.min(1.4, mVeg));
+          const vegBursts = 1 + Math.floor(density * 2 + coreMul);
           for (let vi = 0; vi < vegBursts; vi++) {
             if (this.pools.vegetation.activeCount < vegCap || Math.random() < vegChance) {
               if (this._spawnOne("vegetation", pred, yaw, d * mVeg, biome, res)) any = true;
             }
           }
-          if (density > 0.2 && Math.random() < 0.7 * mVeg) {
-            if (this._spawnOne("vegetation", pred, yaw, d * mVeg, biome, res)) any = true;
-          }
         }
-        // Ruins — more of them, still far (clear bubble enforced in _spawnRuin)
+        // Ruins — prefer nesting into open forest scenes first, then distant flanks
         if (mRuin > 0.08) {
-          const ruinCap = 5 + Math.floor(coreRuin * 5);
+          const ruinCap = 5 + Math.floor(coreRuin * 4);
+          const openGrove = this._findSceneAhead(playerPos || pred, yaw, {
+            maxDist: 100,
+            needRuin: true,
+          });
+          if (openGrove && Math.random() < 0.55 + density * 0.25) {
+            this.ruinCooldown = 0;
+            if (
+              this._spawnRuin(
+                pred,
+                yaw,
+                Math.min(1.25, d * mRuin),
+                biome,
+                res,
+                this.pools.ruin,
+                playerPos,
+                { forceGrove: true }
+              )
+            ) {
+              any = true;
+            }
+          }
           const ruinChance =
-            (0.38 + density * 0.4 + res * 0.3 + (biome.weights.ruin || 0.15) * 0.55 + coreRuin) * mRuin;
+            (0.32 + density * 0.35 + res * 0.25 + (biome.weights.ruin || 0.15) * 0.5 + coreRuin) * mRuin;
           if (this.pools.ruin.activeCount < ruinCap || Math.random() < ruinChance) {
             if (this._spawnOne("ruin", pred, yaw, Math.min(1.25, d * (0.95 + mRuin * 0.3)), biome, res)) any = true;
-          }
-          if (density > 0.45 && Math.random() < (0.4 + coreRuin * 0.45) * mRuin) {
-            if (this._spawnOne("ruin", pred, yaw, d, biome, res)) any = true;
           }
         }
         // Details — RICH variety on flanks
@@ -3992,6 +6114,8 @@
         intention: this.scoreSys.intentionFactor,
         trajectory: this.scoreSys.trajectoryFactor,
         density: this.scoreSys.density,
+        sceneBand: this._sceneBand || densityBand(this.scoreSys.density).id,
+        scenes: this._sceneFootprints ? this._sceneFootprints.length : 0,
         active: this.stats.active,
         spawned: this.stats.spawned,
         biome: this.currentBiome.name,
@@ -4027,9 +6151,17 @@
     SPAWN_THRESHOLD: SPAWN_THRESHOLD,
     BIOME_CELL: BIOME_CELL,
     BIOMES: BIOMES,
+    BIOME_LIST: BIOME_LIST,
+    BIOME_COUNT: BIOME_COUNT,
+    SURFACE_BIOME_IDS: SURFACE_BIOME_IDS,
     sampleBiome: sampleBiome,
+    mixBiomeColor: mixBiomeColor,
     setForceBiome: setForceBiome,
     getForceBiome: getForceBiome,
     PLANET_BIOME_MAP: PLANET_BIOME_MAP,
+    DENSITY_BANDS: DENSITY_BANDS,
+    densityBand: densityBand,
+    sceneKit: sceneKit,
+    VEG_TYPES: VEG_TYPES,
   };
 })(typeof window !== "undefined" ? window : globalThis);

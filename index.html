@@ -11,27 +11,64 @@
 </head>
 <body>
   <div id="boot">
-    <div class="boot-card">
-      <div class="boot-mark">⚡🐺</div>
-      <h1>BOLT ENGINE</h1>
-      <p class="subtitle">Spiral-47 · Infinite Open Cosmos</p>
-      <p class="tagline">No walls. Sprint forever — the world streams and reveals itself with purpose.</p>
-      <ul class="controls">
-        <li><kbd>W A S D</kbd> Move</li>
-        <li><kbd>Shift</kbd> Sprint (the fundamental force)</li>
-        <li><kbd>Space</kbd> Jump / boost chain</li>
-        <li><kbd>Mouse</kbd> Look · <kbd>H</kbd> Howl (Resonance burst)</li>
-        <li><kbd>R</kbd> Recall to Citadel · <kbd>H</kbd> Howl · <kbd>L</kbd> Decrees · <kbd>J</kbd> Quest · <kbd>P</kbd> Progress · <kbd>M</kbd> Mute</li>
-      </ul>
-      <button id="start-btn" type="button">AROOOO — ENTER THE BOLTVERSE</button>
-      <p class="powered">Powered by xAI &amp; YOU · Prototype build</p>
-      <p id="load-status" class="powered">Loading Three.js…</p>
+    <div class="boot-bg" aria-hidden="true">
+      <div class="boot-orb boot-orb-a"></div>
+      <div class="boot-orb boot-orb-b"></div>
+      <div class="boot-grid"></div>
+      <div class="boot-scan"></div>
+    </div>
+    <div class="boot-shell">
+      <header class="boot-top">
+        <span class="boot-chip">SPIRAL-47</span>
+        <span class="boot-chip boot-chip-dim">v2.4 · MAX</span>
+      </header>
+      <div class="boot-card">
+        <div class="boot-logo" aria-hidden="true">
+          <span class="boot-logo-bolt">⚡</span>
+          <span class="boot-logo-wolf">🐺</span>
+        </div>
+        <p class="boot-kicker">STARBOLTSPRINT PROTOCOL</p>
+        <h1>BOLT ENGINE</h1>
+        <p class="subtitle">Infinite open cosmos</p>
+        <p class="tagline">Sprint with purpose. The world streams into being around you.</p>
+
+        <div class="boot-keys" aria-label="Controls">
+          <div class="boot-key"><kbd>WASD</kbd><span>Move</span></div>
+          <div class="boot-key"><kbd>SHIFT</kbd><span>Sprint</span></div>
+          <div class="boot-key"><kbd>SPACE</kbd><span>Jump</span></div>
+          <div class="boot-key"><kbd>MOUSE</kbd><span>Look</span></div>
+          <div class="boot-key"><kbd>H</kbd><span>Howl</span></div>
+          <div class="boot-key"><kbd>R</kbd><span>Recall</span></div>
+          <div class="boot-key"><kbd>F</kbd><span>Fullscreen</span></div>
+          <div class="boot-key"><kbd>ESC</kbd><span>Pause</span></div>
+        </div>
+
+        <div class="boot-actions">
+          <button id="start-btn" type="button">
+            <span class="boot-btn-glow"></span>
+            ENTER THE BOLTVERSE
+          </button>
+          <button id="boot-fs-btn" type="button" class="boot-btn-ghost" title="Fullscreen (F)">
+            FULLSCREEN
+          </button>
+        </div>
+
+        <div class="boot-foot">
+          <p id="load-status" class="boot-status">Loading systems…</p>
+          <p class="powered">Powered by xAI &amp; YOU</p>
+        </div>
+      </div>
+      <p class="boot-hint-extra">Also: <kbd>L</kbd> Decrees · <kbd>J</kbd> Quest · <kbd>P</kbd> Progress · <kbd>M</kbd> Mute · <kbd>[</kbd><kbd>]</kbd> Zoom</p>
     </div>
   </div>
 
+  <button id="fs-btn" type="button" class="fs-fab" title="Toggle fullscreen (F)" aria-label="Fullscreen">
+    <span class="fs-fab-icon" aria-hidden="true">⛶</span>
+  </button>
+
   <div id="hud" class="hidden">
     <div class="hud-top">
-      <div class="brand">BOLT ENGINE <span>v1.4 · FLANKS</span></div>
+      <div class="brand">BOLT ENGINE <span>v2.4 · MAX</span></div>
       <div id="scale-badge" class="scale-badge scale-paw" aria-live="polite">
         <span class="scale-badge-label">SCALE</span>
         <span class="scale-badge-name" id="scale-badge-name">PAW</span>
@@ -48,36 +85,44 @@
         </div>
         <div class="planet-nav-status" id="planet-nav-status">Sprint toward the beacon</div>
       </div>
-      <div class="packet" id="packet">
-        <div class="meter">
-          <label>SPRINT</label>
-          <div class="bar"><i id="bar-sprint"></i></div>
-          <span id="val-speed">0</span>
+      <div class="packet telemetry" id="packet">
+        <div class="telemetry-head">
+          <span class="telemetry-title">TELEMETRY</span>
+          <span class="telemetry-live" aria-hidden="true">● LIVE</span>
         </div>
-        <div class="meter">
-          <label>MOMENTUM</label>
-          <div class="bar"><i id="bar-momentum"></i></div>
-          <span id="val-momentum">0%</span>
+        <div class="telemetry-primary">
+          <div class="meter meter-sprint">
+            <label>SPRINT</label>
+            <div class="bar"><i id="bar-sprint"></i></div>
+            <span id="val-speed">0</span>
+          </div>
+          <div class="meter meter-momentum">
+            <label>MOMENTUM</label>
+            <div class="bar"><i id="bar-momentum"></i></div>
+            <span id="val-momentum">0%</span>
+          </div>
+          <div class="meter meaningful">
+            <label>MEANINGFUL</label>
+            <div class="bar"><i id="bar-meaningful"></i></div>
+            <span id="val-meaningful">0%</span>
+          </div>
+          <div class="meter core" id="meter-core">
+            <label>STAR CORE <em id="val-core-stage">SPARK</em></label>
+            <div class="bar"><i id="bar-core"></i></div>
+            <span id="val-core">0%</span>
+          </div>
         </div>
-        <div class="meter">
-          <label>INTENTION</label>
-          <div class="bar"><i id="bar-intention"></i></div>
-          <span id="val-intention">—</span>
-        </div>
-        <div class="meter meaningful">
-          <label>MEANINGFUL</label>
-          <div class="bar"><i id="bar-meaningful"></i></div>
-          <span id="val-meaningful">0%</span>
-        </div>
-        <div class="meter core" id="meter-core">
-          <label>STAR CORE <em id="val-core-stage">SPARK</em></label>
-          <div class="bar"><i id="bar-core"></i></div>
-          <span id="val-core">0%</span>
-        </div>
-        <div class="meter">
-          <label>RESONANCE</label>
-          <div class="bar"><i id="bar-resonance"></i></div>
-          <span id="val-resonance">0%</span>
+        <div class="telemetry-secondary">
+          <div class="meter meter-compact">
+            <label>INTENTION</label>
+            <div class="bar"><i id="bar-intention"></i></div>
+            <span id="val-intention">—</span>
+          </div>
+          <div class="meter meter-compact meter-resonance">
+            <label>RESONANCE</label>
+            <div class="bar"><i id="bar-resonance"></i></div>
+            <span id="val-resonance">0%</span>
+          </div>
         </div>
       </div>
     </div>
@@ -85,7 +130,7 @@
       <div id="toast"></div>
       <div id="gate-banner" class="gate-banner hidden"></div>
       <div id="spawn-stats" class="spawn-stats"></div>
-      <div class="hint"><kbd>R</kbd> Recall · <kbd>Shift+Space</kbd> ascent · Scroll / <kbd>[</kbd><kbd>]</kbd> zoom · H howl</div>
+      <div class="hint"><kbd>R</kbd> Recall · <kbd>Shift+Space</kbd> ascent · Scroll / <kbd>[</kbd><kbd>]</kbd> zoom · <kbd>F</kbd> Fullscreen · H howl</div>
     </div>
     <div id="crosshair"></div>
     <div id="gate-flash" class="gate-flash"></div>

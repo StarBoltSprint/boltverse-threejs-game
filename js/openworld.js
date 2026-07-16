@@ -13,8 +13,10 @@
   if (!THREE) return;
 
   const CHUNK = 80;       // world units per chunk
-  const VIEW = 3;         // chunks radius around player (7x7 grid)
-  const MAX_CHUNKS = 64;
+  let VIEW = 3;           // chunks radius (7x7) — high graphics default
+  let GROUND_SEGS = 44;   // heightfield density
+  let DRESS_MUL = 1.1;    // ground dressing density
+  const MAX_CHUNKS = 80;
 
   /** Scale definitions (lore order) */
   const SCALE_STAGES = [
@@ -22,7 +24,7 @@
       id: "paw",
       name: "PAW",
       min: 0,
-      fog: 0.0044,
+      fog: 0.0032,
       far: 550,
       camMul: 1,
       gravity: 1,
@@ -43,7 +45,7 @@
       id: "planetary",
       name: "PLANETARY",
       min: 0.22,
-      fog: 0.0024,
+      fog: 0.0018,
       far: 1400,
       camMul: 1.35,
       gravity: 0.72,
@@ -212,7 +214,7 @@
   }
   function fbm(x, z) {
     let v = 0, a = 0.5, f = 1;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const s = Math.sin(x * f * 12.9898 + z * f * 78.233) * 43758.5453;
       v += a * (s - Math.floor(s));
       a *= 0.5;
@@ -220,18 +222,94 @@
     }
     return v;
   }
+  /** Ridged multifractal — sharp crests for ember / alpine */
+  function ridgeFbm(x, z) {
+    let v = 0, a = 0.5, f = 1;
+    for (let i = 0; i < 5; i++) {
+      const s = Math.sin(x * f * 12.9898 + z * f * 78.233) * 43758.5453;
+      const n = s - Math.floor(s);
+      const r = 1 - Math.abs(n * 2 - 1);
+      v += a * r * r;
+      a *= 0.5;
+      f *= 2.15;
+    }
+    return v;
+  }
 
-  /** Surface height at world XZ — biome heightMul changes terrain feel */
+  /**
+   * Raw height profile for one biome id (no heightMul) — used for soft blending.
+   */
+  function heightProfile(biomeId, x, z, macro, mid, micro) {
+    if (biomeId === "emberVoid") {
+      return ridgeFbm(x * 0.018, z * 0.018) * 5.2 + mid * 1.9 + micro * 0.45;
+    }
+    if (biomeId === "whisperStars") {
+      return macro * 1.35 + mid * 0.75 + micro * 0.28;
+    }
+    if (biomeId === "frostGlacier") {
+      return macro * 4.2 + Math.pow(Math.max(0.01, mid), 1.35) * 2.8 + micro * 0.55;
+    }
+    if (biomeId === "jadeCanopy") {
+      return macro * 3.0 + mid * 1.75 + micro * 0.5;
+    }
+    if (biomeId === "solarGold") {
+      return Math.sin(macro * Math.PI * 2) * 1.35 + mid * 2.4 + micro * 0.4;
+    }
+    if (biomeId === "rosePulse") {
+      return macro * 2.9 + mid * 1.7 + micro * 0.48;
+    }
+    // crystalNebula — rolling teal hills
+    return macro * 3.4 + mid * 1.95 + micro * 0.58;
+  }
+
+  /**
+   * Surface height at world XZ — macro continents + biome silhouette.
+   * Biome height is blend-weighted so transitions are soft hills, not cliff walls.
+   */
   function surfaceHeight(x, z) {
+    const macro = fbm(x * 0.0075, z * 0.0075);
+    const mid = fbm(x * 0.026 + 17, z * 0.026);
+    const micro = fbm(x * 0.085 + 41, z * 0.085);
+
+    let h = 0;
     let mul = 1;
     if (global.BoltProcedural && global.BoltProcedural.sampleBiome) {
       const b = global.BoltProcedural.sampleBiome(x, z, 0);
-      mul = b.primary.heightMul != null ? b.primary.heightMul : 1;
+      const mix = b.mix;
+      const biomes = global.BoltProcedural.BIOMES || {};
+      if (mix) {
+        let sumW = 0;
+        let hAcc = 0;
+        let mulAcc = 0;
+        const ids = global.BoltProcedural.SURFACE_BIOME_IDS || Object.keys(mix);
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i];
+          const w = mix[id] || 0;
+          if (w < 0.02) continue;
+          hAcc += heightProfile(id, x, z, macro, mid, micro) * w;
+          const def = biomes[id];
+          mulAcc += (def && def.heightMul != null ? def.heightMul : 1) * w;
+          sumW += w;
+        }
+        if (sumW > 1e-6) {
+          h = hAcc / sumW;
+          mul = mulAcc / sumW;
+        } else {
+          const id = (b.primary && b.primary.id) || "crystalNebula";
+          h = heightProfile(id, x, z, macro, mid, micro);
+          mul = b.primary && b.primary.heightMul != null ? b.primary.heightMul : 1;
+        }
+      } else {
+        const id = (b.primary && b.primary.id) || "crystalNebula";
+        h = heightProfile(id, x, z, macro, mid, micro);
+        mul = b.primary && b.primary.heightMul != null ? b.primary.heightMul : 1;
+      }
+    } else {
+      h = heightProfile("crystalNebula", x, z, macro, mid, micro);
     }
-    const n = fbm(x * 0.018, z * 0.018);
-    const n2 = fbm(x * 0.05 + 20, z * 0.05);
-    // Ember = harsher ridges; Whisper = flatter; Crystal = smooth hills
-    return (n * 2.2 + n2 * 1.4) * mul;
+    // Micro grit on the heightfield itself
+    h += (hash2(x * 0.55, z * 0.55) - 0.5) * 0.28;
+    return h * mul;
   }
 
   class OpenWorld {
@@ -243,21 +321,14 @@
       scene.add(this.group);
 
       this.groundMat = new THREE.MeshStandardMaterial({
-        color: 0x152238,
-        roughness: 0.9,
-        metalness: 0.12,
-        emissive: 0x0a1528,
-        emissiveIntensity: 0.2,
+        color: 0x1a3a55,
+        roughness: 0.92,
+        metalness: 0.08,
+        emissive: 0x061018,
+        emissiveIntensity: 0.08,
         flatShading: false,
       });
-      // Soft overlay only (almost invisible) — not a harsh wire cage
-      this.gridMat = new THREE.MeshBasicMaterial({
-        color: 0x3df0ff,
-        transparent: true,
-        opacity: 0.025,
-        wireframe: true,
-        depthWrite: false,
-      });
+      // Wire grid removed (ground polish tier 1) — organic veins live in albedo only
 
       // Legacy mini-marker removed — real Thunderwolf Citadel lives in citadel.js
       this.citadel = null;
@@ -280,47 +351,86 @@
 
       const ox = cx * CHUNK;
       const oz = cz * CHUNK;
-      // Higher mesh density — smoother hills + more silhouette detail
-      const segs = 40;
+      // Heightfield density from quality controller
+      const segs = GROUND_SEGS;
       const geo = new THREE.PlaneGeometry(CHUNK, CHUNK, segs, segs);
       geo.rotateX(-Math.PI / 2);
 
       const pos = geo.attributes.position;
       const colors = new Float32Array(pos.count * 3);
+      const tmpCol = new THREE.Color();
+      const mixColorFn =
+        global.BoltProcedural && global.BoltProcedural.mixBiomeColor
+          ? global.BoltProcedural.mixBiomeColor
+          : null;
+      let biomeVotes = Object.create(null);
+      let sampleN = 0;
+
       for (let i = 0; i < pos.count; i++) {
         const lx = pos.getX(i);
         const lz = pos.getZ(i);
         const wx = ox + CHUNK * 0.5 + lx;
         const wz = oz + CHUNK * 0.5 + lz;
-        // Macro height + micro noise for ground texture feel
         let h = surfaceHeight(wx, wz);
-        h += (hash2(wx * 0.4, wz * 0.4) - 0.5) * 0.35;
-        h += (hash2(wx * 1.1 + 3, wz * 1.1) - 0.5) * 0.12;
         pos.setY(i, h);
-        // Soft vertex tint variation (not flat color plate)
+
+        // Soft per-vertex biome color (organic transitions, not square cell cuts)
+        let cr = 0.15;
+        let cg = 0.22;
+        let cb = 0.32;
+        if (global.BoltProcedural && global.BoltProcedural.sampleBiome) {
+          const b = global.BoltProcedural.sampleBiome(wx, wz, 0);
+          if (mixColorFn && b.mix) {
+            mixColorFn(b.mix, "ground", tmpCol);
+            cr = tmpCol.r;
+            cg = tmpCol.g;
+            cb = tmpCol.b;
+          } else if (b.primary) {
+            tmpCol.setHex(b.primary.ground || 0x0c2840);
+            cr = tmpCol.r;
+            cg = tmpCol.g;
+            cb = tmpCol.b;
+          }
+          // Vote for chunk material (dominant still drives albedo map)
+          const pid = b.primary && b.primary.id;
+          if (pid) {
+            biomeVotes[pid] = (biomeVotes[pid] || 0) + 1;
+            sampleN++;
+          }
+        }
+        // Height / noise shade so valleys read darker without hard stripes
         const n = hash2(wx * 0.08, wz * 0.08);
-        const tint = 0.88 + n * 0.2;
-        colors[i * 3] = tint;
-        colors[i * 3 + 1] = tint;
-        colors[i * 3 + 2] = 0.92 + n * 0.12;
+        const shade = 0.78 + n * 0.28 + Math.min(0.14, h * 0.012);
+        colors[i * 3] = Math.min(1.4, cr * shade * 3.2);
+        colors[i * 3 + 1] = Math.min(1.4, cg * shade * 3.2);
+        colors[i * 3 + 2] = Math.min(1.4, cb * shade * 3.2);
       }
       pos.needsUpdate = true;
       geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
       geo.computeVertexNormals();
 
-      // Textured biome ground
+      // Chunk albedo map from majority biome (vertex colors blend the edges)
       let biomeId = "crystalNebula";
-      let gridCol = 0x3df0ff;
-      if (global.BoltProcedural && global.BoltProcedural.sampleBiome) {
+      let bestVote = 0;
+      for (const id in biomeVotes) {
+        if (biomeVotes[id] > bestVote) {
+          bestVote = biomeVotes[id];
+          biomeId = id;
+        }
+      }
+      if (sampleN === 0 && global.BoltProcedural && global.BoltProcedural.sampleBiome) {
         const b = global.BoltProcedural.sampleBiome(ox + CHUNK * 0.5, oz + CHUNK * 0.5);
         biomeId = b.primary.id;
-        gridCol = b.primary.color;
       }
 
       let mat;
       if (global.BoltGraphics && global.BoltGraphics.makeGroundMaterial) {
         mat = global.BoltGraphics.makeGroundMaterial(biomeId);
+        // Clone so we can enable vertexColors without mutating cache
+        mat = mat.clone();
         mat.vertexColors = true;
+        // Neutral base so vertex biome mix reads through the map
+        mat.color.setRGB(1.05, 1.05, 1.05);
       } else {
         mat = this.groundMat.clone();
         mat.vertexColors = true;
@@ -329,7 +439,7 @@
           if (bm) {
             mat.color.setHex(bm.ground);
             mat.emissive.setHex(bm.groundEmissive);
-            mat.emissiveIntensity = 0.35;
+            mat.emissiveIntensity = 0.12;
           }
         }
       }
@@ -337,18 +447,30 @@
       const mesh = new THREE.Mesh(geo, mat);
       mesh.receiveShadow = true;
       mesh.castShadow = false;
+      mesh.name = "GroundChunk";
+      mesh.frustumCulled = true;
       g.add(mesh);
 
-      // Ultra-soft biome tint grid
-      const gm = this.gridMat.clone();
-      gm.color.setHex(gridCol);
-      gm.opacity = 0.012;
-      const wire = new THREE.Mesh(geo.clone(), gm);
-      wire.position.y = 0.03;
-      g.add(wire);
+      // --- Tier 4: dense ground dressing (instanced) + clear bubbles ---
+      this._dressChunk(g, cx, cz, ox, oz, biomeId);
 
-      // Richer static ground dressing (pebbles, crystals, patches)
+      g.position.set(ox + CHUNK * 0.5, 0, oz + CHUNK * 0.5);
+      return g;
+    }
+
+    /**
+     * Dense surface dressing: pebbles, moss, crystals, dust plates, few boulders.
+     * Clear bubble around world origin (citadel) and sparse random clearings.
+     */
+    _dressChunk(g, cx, cz, ox, oz, biomeId) {
       const seed = hash2(cx * 12.3, cz * 45.7);
+      const accent =
+        (global.BoltProcedural &&
+          global.BoltProcedural.BIOMES &&
+          global.BoltProcedural.BIOMES[biomeId] &&
+          global.BoltProcedural.BIOMES[biomeId].color) ||
+        0x67e8f9;
+
       let rockMat;
       if (global.BoltGraphics && global.BoltGraphics.makeRockMaterial) {
         rockMat = global.BoltGraphics.makeRockMaterial(biomeId);
@@ -359,110 +481,168 @@
           flatShading: true,
         });
       }
-      const accent =
-        (global.BoltProcedural &&
-          global.BoltProcedural.BIOMES &&
-          global.BoltProcedural.BIOMES[biomeId] &&
-          global.BoltProcedural.BIOMES[biomeId].color) ||
-        0x67e8f9;
 
-      // More props: 8–16 per chunk
-      const props = 8 + Math.floor(seed * 10);
-      for (let i = 0; i < props; i++) {
-        const px = (hash2(cx + i * 1.7, cz + i) - 0.5) * CHUNK * 0.9;
-        const pz = (hash2(cz + i * 2.3, cx + i * 0.5) - 0.5) * CHUNK * 0.9;
+      const tuftCol =
+        biomeId === "emberVoid"
+          ? 0x7c2d12
+          : biomeId === "jadeCanopy"
+            ? 0x059669
+            : biomeId === "frostGlacier"
+              ? 0x64748b
+              : biomeId === "rosePulse"
+                ? 0x9d174d
+                : 0x4c1d95;
+      const tuftEm =
+        biomeId === "emberVoid" ? 0xea580c : accent;
+
+      const pebbleMat = rockMat;
+      const tuftMat = new THREE.MeshStandardMaterial({
+        color: tuftCol,
+        emissive: tuftEm,
+        emissiveIntensity: 0.22,
+        roughness: 0.85,
+        flatShading: true,
+      });
+      const crystMat = new THREE.MeshStandardMaterial({
+        color: accent,
+        emissive: accent,
+        emissiveIntensity: 0.5,
+        metalness: 0.45,
+        roughness: 0.22,
+        transparent: true,
+        opacity: 0.92,
+      });
+      const plateMat = new THREE.MeshStandardMaterial({
+        color: biomeId === "emberVoid" ? 0x3b1a0e : 0x0e2a40,
+        roughness: 0.95,
+        metalness: 0.05,
+        emissive: accent,
+        emissiveIntensity: 0.06,
+      });
+
+      const pebbleGeo = new THREE.DodecahedronGeometry(0.28, 0);
+      const tuftGeo = new THREE.ConeGeometry(0.18, 0.42, 5);
+      const crystGeo = new THREE.ConeGeometry(0.1, 0.48, 5);
+      const plateGeo = new THREE.CylinderGeometry(0.55, 0.7, 0.08, 7);
+
+      // Counts scale with quality dressMul (art style unchanged)
+      const dm = DRESS_MUL;
+      const nPebble = Math.max(8, Math.floor((42 + seed * 22) * dm));
+      const nTuft = Math.max(6, Math.floor((28 + hash2(cx + 1, cz) * 18) * dm));
+      const nCryst = Math.max(4, Math.floor((18 + hash2(cz + 2, cx) * 14) * dm));
+      const nPlate = Math.max(3, Math.floor((10 + hash2(cx * 3, cz * 5) * 8) * dm));
+      const nBoulder = Math.max(1, Math.floor((3 + seed * 3) * Math.min(1, dm + 0.2)));
+
+      const dummy = new THREE.Object3D();
+      const CLEAR_CITADEL = 22; // keep gate / throne plaza readable
+
+      function inClear(wx, wz) {
+        if (Math.hypot(wx, wz) < CLEAR_CITADEL) return true;
+        // Deterministic soft clearings (open flats / subtle path feel)
+        const cellX = Math.floor(wx / 16);
+        const cellZ = Math.floor(wz / 16);
+        const c = hash2(cellX * 1.7, cellZ * 2.3);
+        if (c > 0.88) {
+          const lx = wx - cellX * 16 - 8;
+          const lz = wz - cellZ * 16 - 8;
+          if (Math.hypot(lx, lz) < 2.6 + c * 2) return true;
+        }
+        return false;
+      }
+
+      function placeInstances(count, geo, mat, kind) {
+        const mesh = new THREE.InstancedMesh(geo, mat, count);
+        mesh.castShadow = false; // still skip dressing shadows (expensive, little visual gain)
+        mesh.receiveShadow = true;
+        mesh.name = "Dress_" + kind;
+        mesh.frustumCulled = true;
+        let written = 0;
+        const kindSalt = kind.charCodeAt(0) * 0.13;
+        for (let i = 0; i < count * 3 && written < count; i++) {
+          const px = (hash2(cx + i * 1.71 + kindSalt, cz + i * 0.9) - 0.5) * CHUNK * 0.92;
+          const pz = (hash2(cz + i * 2.31, cx + i * 0.55 + kindSalt) - 0.5) * CHUNK * 0.92;
+          const wx = ox + CHUNK * 0.5 + px;
+          const wz = oz + CHUNK * 0.5 + pz;
+          if (inClear(wx, wz)) continue;
+          const hy = surfaceHeight(wx, wz);
+          const roll = hash2(i * 3.1 + cx, cz * 2.2 + i + kindSalt);
+          dummy.position.set(px, hy + 0.04, pz);
+          if (kind === "pebble") {
+            const s = 0.55 + roll * 1.6;
+            dummy.scale.set(s, 0.4 + roll * 0.85, s * (0.8 + roll * 0.3));
+            dummy.rotation.set(roll * 2.1, roll * 4.2, roll * 1.3);
+            dummy.position.y = hy + 0.08 * s;
+          } else if (kind === "tuft") {
+            const s = 0.7 + roll * 1.1;
+            dummy.scale.set(s * 1.15, s, s * 1.15);
+            dummy.rotation.set(0, roll * 6.28, (roll - 0.5) * 0.25);
+            dummy.position.y = hy + 0.12 * s;
+          } else if (kind === "cryst") {
+            const s = 0.65 + roll * 1.35;
+            dummy.scale.set(s * 0.7, s * (0.9 + roll), s * 0.7);
+            dummy.rotation.set((roll - 0.5) * 0.4, roll * 5, (roll - 0.5) * 0.35);
+            dummy.position.y = hy + 0.1 * s;
+          } else if (kind === "plate") {
+            const s = 0.9 + roll * 1.8;
+            dummy.scale.set(s, 1, s);
+            dummy.rotation.set(0, roll * 6.28, 0);
+            dummy.position.y = hy + 0.03;
+          } else {
+            dummy.scale.set(1, 1, 1);
+            dummy.rotation.set(0, 0, 0);
+          }
+          dummy.updateMatrix();
+          mesh.setMatrixAt(written, dummy.matrix);
+          written++;
+        }
+        if (written <= 0) return;
+        mesh.count = written;
+        mesh.instanceMatrix.needsUpdate = true;
+        g.add(mesh);
+      }
+
+      placeInstances(nPebble, pebbleGeo, pebbleMat, "pebble");
+      placeInstances(nTuft, tuftGeo, tuftMat, "tuft");
+      placeInstances(nCryst, crystGeo, crystMat, "cryst");
+      placeInstances(nPlate, plateGeo, plateMat, "plate");
+
+      // Larger unique boulders + rare platforms (not instanced — few)
+      for (let i = 0; i < nBoulder; i++) {
+        const px = (hash2(cx + i * 4.1, cz + 9) - 0.5) * CHUNK * 0.75;
+        const pz = (hash2(cz + i * 3.3, cx + 7) - 0.5) * CHUNK * 0.75;
         const wx = ox + CHUNK * 0.5 + px;
         const wz = oz + CHUNK * 0.5 + pz;
+        if (inClear(wx, wz)) continue;
         const hy = surfaceHeight(wx, wz);
-        const roll = hash2(i * 3.1 + cx, cz * 2.2 + i);
-
-        if (roll < 0.12 && i < 2) {
-          // Landing platform
+        const roll = hash2(i + cx * 2, cz);
+        if (roll < 0.22 && i === 0) {
           const plat = new THREE.Mesh(
-            new THREE.BoxGeometry(5 + seed * 5, 0.7, 5 + seed * 3),
+            new THREE.BoxGeometry(4 + seed * 4, 0.55, 4 + seed * 2.5),
             new THREE.MeshStandardMaterial({
               color: 0x1e3a5f,
-              metalness: 0.45,
-              roughness: 0.45,
+              metalness: 0.4,
+              roughness: 0.5,
               emissive: accent,
-              emissiveIntensity: 0.1,
+              emissiveIntensity: 0.08,
             })
           );
-          plat.position.set(px, hy + 0.35, pz);
+          plat.position.set(px, hy + 0.28, pz);
           plat.receiveShadow = true;
           plat.castShadow = true;
           g.add(plat);
-        } else if (roll < 0.45) {
-          // Rock / boulder
+        } else {
           const rock = new THREE.Mesh(
-            new THREE.DodecahedronGeometry(0.35 + roll * 1.4, 0),
+            new THREE.DodecahedronGeometry(0.55 + roll * 1.5, 0),
             rockMat
           );
-          rock.position.set(px, hy + 0.25 + roll * 0.3, pz);
-          rock.scale.set(1, 0.5 + roll * 0.9, 1);
+          rock.position.set(px, hy + 0.3 + roll * 0.25, pz);
+          rock.scale.set(1.1, 0.55 + roll * 0.85, 1.1);
           rock.rotation.set(roll * 2, roll * 4, roll);
           rock.castShadow = true;
           rock.receiveShadow = true;
           g.add(rock);
-        } else if (roll < 0.7) {
-          // Crystal shard patch
-          for (let k = 0; k < 2 + Math.floor(roll * 3); k++) {
-            const cryst = new THREE.Mesh(
-              new THREE.ConeGeometry(0.08 + roll * 0.12, 0.35 + roll * 0.5, 5),
-              new THREE.MeshStandardMaterial({
-                color: accent,
-                emissive: accent,
-                emissiveIntensity: 0.55,
-                metalness: 0.4,
-                roughness: 0.25,
-                transparent: true,
-                opacity: 0.9,
-              })
-            );
-            cryst.position.set(
-              px + (hash2(k, i) - 0.5) * 1.2,
-              hy + 0.15,
-              pz + (hash2(i, k + 2) - 0.5) * 1.2
-            );
-            cryst.rotation.z = (hash2(k + 1, i) - 0.5) * 0.5;
-            cryst.castShadow = true;
-            g.add(cryst);
-          }
-        } else if (roll < 0.88) {
-          // Grass / moss tuft (low poly)
-          const tuft = new THREE.Mesh(
-            new THREE.ConeGeometry(0.2 + roll * 0.15, 0.35 + roll * 0.4, 5),
-            new THREE.MeshStandardMaterial({
-              color: biomeId === "emberVoid" ? 0x7c2d12 : biomeId === "jadeCanopy" ? 0x059669 : 0x4c1d95,
-              emissive: biomeId === "emberVoid" ? 0xea580c : accent,
-              emissiveIntensity: 0.25,
-              roughness: 0.8,
-              flatShading: true,
-            })
-          );
-          tuft.position.set(px, hy + 0.15, pz);
-          tuft.scale.set(1.2, 1, 1.2);
-          g.add(tuft);
-        } else {
-          // Small energy mote on ground
-          const mote = new THREE.Mesh(
-            new THREE.SphereGeometry(0.12 + roll * 0.1, 8, 8),
-            new THREE.MeshStandardMaterial({
-              color: accent,
-              emissive: accent,
-              emissiveIntensity: 0.9,
-              roughness: 0.2,
-              transparent: true,
-              opacity: 0.75,
-            })
-          );
-          mote.position.set(px, hy + 0.2, pz);
-          g.add(mote);
         }
       }
-
-      g.position.set(ox + CHUNK * 0.5, 0, oz + CHUNK * 0.5);
-      return g;
     }
 
     /** Wipe and rebuild all chunks (used when landing on a new planet biome) */
@@ -485,41 +665,95 @@
       this.ensureAround(wx != null ? wx : 0, wz != null ? wz : 0);
     }
 
-    ensureAround(wx, wz) {
+    /**
+     * Stream chunks under Bolt + extra slices along velocity / look
+     * so the path ahead always has ground (no empty horizon).
+     * @param {number} wx
+     * @param {number} wz
+     * @param {{ vx?: number, vz?: number, lookYaw?: number }} [opts]
+     */
+    ensureAround(wx, wz, opts) {
+      opts = opts || {};
       const cx = Math.floor(wx / CHUNK);
       const cz = Math.floor(wz / CHUNK);
-      if (cx === this._lastCx && cz === this._lastCz) {
-        // still prune distant occasionally
+
+      // Prefer motion direction; fall back to look yaw
+      let fdx = 0;
+      let fdz = 0;
+      const sp = Math.hypot(opts.vx || 0, opts.vz || 0);
+      if (sp > 0.8) {
+        fdx = (opts.vx || 0) / sp;
+        fdz = (opts.vz || 0) / sp;
+      } else if (opts.lookYaw != null && isFinite(opts.lookYaw)) {
+        fdx = Math.sin(opts.lookYaw);
+        fdz = Math.cos(opts.lookYaw);
       }
-      this._lastCx = cx;
-      this._lastCz = cz;
 
       const needed = new Set();
-      for (let dz = -VIEW; dz <= VIEW; dz++) {
-        for (let dx = -VIEW; dx <= VIEW; dx++) {
-          const k = this._key(cx + dx, cz + dz);
-          needed.add(k);
-          if (!this.chunks.has(k)) {
-            const ch = this._buildChunk(cx + dx, cz + dz);
-            this.group.add(ch);
-            this.chunks.set(k, { group: ch, cx: cx + dx, cz: cz + dz });
+      function need(ix, iz) {
+        const k = this._key(ix, iz);
+        needed.add(k);
+        if (!this.chunks.has(k)) {
+          const ch = this._buildChunk(ix, iz);
+          this.group.add(ch);
+          this.chunks.set(k, { group: ch, cx: ix, cz: iz });
+        }
+      }
+      const self = this;
+      const add = function (ix, iz) {
+        need.call(self, ix, iz);
+      };
+
+      // Base radius (always ≥ 2 from quality floors)
+      const view = Math.max(2, VIEW);
+      for (let dz = -view; dz <= view; dz++) {
+        for (let dx = -view; dx <= view; dx++) {
+          add(cx + dx, cz + dz);
+        }
+      }
+
+      // Directional extension: extra chunks ahead (and slight flanks)
+      if (fdx !== 0 || fdz !== 0) {
+        const ahead = view + 2; // always look farther forward than sideways
+        for (let step = 1; step <= ahead; step++) {
+          const bx = Math.round(fdx * step);
+          const bz = Math.round(fdz * step);
+          add(cx + bx, cz + bz);
+          // side-forward wedges so the corridor is full
+          const px = -bz; // perpendicular
+          const pz = bx;
+          if (step <= view + 1) {
+            add(cx + bx + Math.round(px * 0.5), cz + bz + Math.round(pz * 0.5));
+            add(cx + bx - Math.round(px * 0.5), cz + bz - Math.round(pz * 0.5));
+          }
+          if (step <= view) {
+            add(cx + bx + px, cz + bz + pz);
+            add(cx + bx - px, cz + bz - pz);
           }
         }
       }
 
-      // Unload far chunks
+      this._lastCx = cx;
+      this._lastCz = cz;
+
+      // Unload chunks not needed; keep ahead ones preferred
       const toRemove = [];
-      this.chunks.forEach((val, k) => {
+      this.chunks.forEach(function (val, k) {
         if (!needed.has(k)) toRemove.push(k);
       });
-      // Keep memory bounded
       if (this.chunks.size > MAX_CHUNKS) {
-        toRemove.sort((a, b) => {
-          const A = this.chunks.get(a);
-          const B = this.chunks.get(b);
-          const da = Math.abs(A.cx - cx) + Math.abs(A.cz - cz);
-          const db = Math.abs(B.cx - cx) + Math.abs(B.cz - cz);
-          return db - da;
+        toRemove.sort(function (a, b) {
+          const A = self.chunks.get(a);
+          const B = self.chunks.get(b);
+          // Score: farther from player + behind motion = unload first
+          function score(C) {
+            const dx = C.cx - cx;
+            const dz = C.cz - cz;
+            const dist = Math.abs(dx) + Math.abs(dz);
+            const behind = fdx || fdz ? -(dx * fdx + dz * fdz) : 0;
+            return dist + behind * 2;
+          }
+          return score(B) - score(A);
         });
       }
       for (let i = 0; i < toRemove.length; i++) {
@@ -527,11 +761,13 @@
         const ch = this.chunks.get(k);
         if (!ch) continue;
         if (needed.has(k) && this.chunks.size <= MAX_CHUNKS) continue;
+        // Never unload if still required
+        if (needed.has(k)) continue;
         this.group.remove(ch.group);
-        ch.group.traverse((o) => {
+        ch.group.traverse(function (o) {
           if (o.geometry) o.geometry.dispose();
           if (o.material) {
-            if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+            if (Array.isArray(o.material)) o.material.forEach(function (m) { m.dispose(); });
             else o.material.dispose();
           }
         });
@@ -663,6 +899,17 @@
         progress: this.transitionProgress,
         props: props,
       };
+    }
+
+    /**
+     * Adaptive quality — lowers chunk radius / mesh segs / dressing without
+     * changing art style (same materials & generators).
+     */
+    setQuality(q) {
+      if (!q) return;
+      if (q.view != null) VIEW = Math.max(2, Math.min(4, q.view | 0));
+      if (q.groundSegs != null) GROUND_SEGS = Math.max(28, Math.min(48, q.groundSegs | 0));
+      if (q.dressMul != null) DRESS_MUL = Math.max(0.55, Math.min(1.35, q.dressMul));
     }
 
     heightAt(x, z) {
