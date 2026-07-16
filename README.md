@@ -1,14 +1,16 @@
 # BOLT ENGINE — StarBoltSprint (Three.js)
 
-**v2.5 · Playable open-world cosmic sprint · PCG · Graphics tiers · Perf pass**
+**v2.5 · Playable open-world cosmic sprint · PCG · Graphics tiers · Smooth movement**
 
 ## Play online
 
 **https://starboltsprint.github.io/boltverse-threejs-game/**
 
-Hard-refresh after updates: **Ctrl+F5**.
+Hard-refresh after updates: **Ctrl+F5** (important so browsers don’t keep an old `game.js`).
 
 Repo: **https://github.com/StarBoltSprint/boltverse-threejs-game**
+
+Latest on `main`: fixed-timestep sprint physics (no freeze/crawl on low-end PCs), vegetation boost on HIGH/MAX, clean PCG + path corridor.
 
 ## Run locally
 
@@ -16,9 +18,12 @@ Double-click **`index.html`** (or open via a local server). Use **Ctrl+F5** afte
 
 ## What’s in v2.5
 
-### Performance (smooth Low / Med)
+### Performance & movement (smooth Low / Med)
 - Chunk builds **throttled** (1–2 per frame) — less hitching while sprinting
 - Cached height / biome / forest-density noise
+- **Fixed-timestep physics** — sprint stays real-time even at low FPS (no crawl/freeze)
+- Physics split from heavy world/PCG work; bloom/scans skip when lagging
+- Wall **slide** (no bounce stuck); ground height cache
 - **Low / Med**: fewer live PCG objects, light dressing, no bloom/shadows by default
 - **GPU terrain height** only on **MAX**
 - Default graphics tier: **MED** (raise to HIGH/MAX if your PC can take it)
