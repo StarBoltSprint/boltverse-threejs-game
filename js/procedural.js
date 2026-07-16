@@ -20,10 +20,117 @@
   const SPAWN_THRESHOLD = 0.65;
   const FADE_IN_SEC = 0.85;
   const FADE_OUT_SEC = 2.5;
-  const MAX_ACTIVE = 120;
+  let MAX_ACTIVE = 80;
   const WORLD_R = 1e9; // open world — no practical edge
-  const LOOKAHEAD_MIN = 2.4; // seconds — generate farther ahead
-  const LOOKAHEAD_MAX = 6.5;
+  const LOOKAHEAD_MIN = 2.0; // seconds — generate farther ahead
+  const LOOKAHEAD_MAX = 5.0;
+
+  /**
+   * Runtime perf knobs (set by graphics tier via setProceduralQuality).
+   * Low keeps the same art rules, just fewer live objects / cheaper noise.
+   */
+  const PERF = {
+    tier: "high",
+    forestOctaves: 3,
+    forestAttempts: 6,
+    forestNearSamples: 2,
+    vegCap: 22,
+    forestCap: 2,
+    bigVegCap: 4,
+    terrainCap: 4,
+    ruinCap: 2,
+    detailCap: 10,
+    pathCap: 3,
+    vegPerTick: 2,
+    detailPerTick: 1,
+    terrainPerTick: 1,
+    pathPerTick: 1,
+    ruinPerTick: 1,
+    spawnCooldownMul: 1.15,
+  };
+
+  function setProceduralQuality(q) {
+    q = q || {};
+    const tier = q.tier || q.id || "high";
+    PERF.tier = tier;
+    if (tier === "low") {
+      PERF.forestOctaves = 2;
+      PERF.forestAttempts = 3;
+      PERF.forestNearSamples = 1;
+      PERF.vegCap = 10;
+      PERF.forestCap = 1;
+      PERF.bigVegCap = 2;
+      PERF.terrainCap = 2;
+      PERF.ruinCap = 1;
+      PERF.detailCap = 5;
+      PERF.pathCap = 2;
+      PERF.vegPerTick = 1;
+      PERF.detailPerTick = 1;
+      PERF.terrainPerTick = 1;
+      PERF.pathPerTick = 1;
+      PERF.ruinPerTick = 1;
+      PERF.spawnCooldownMul = 1.55;
+      MAX_ACTIVE = 40;
+    } else if (tier === "medium") {
+      PERF.forestOctaves = 2;
+      PERF.forestAttempts = 4;
+      PERF.forestNearSamples = 2;
+      PERF.vegCap = 16;
+      PERF.forestCap = 2;
+      PERF.bigVegCap = 3;
+      PERF.terrainCap = 3;
+      PERF.ruinCap = 2;
+      PERF.detailCap = 8;
+      PERF.pathCap = 3;
+      PERF.vegPerTick = 1;
+      PERF.detailPerTick = 1;
+      PERF.terrainPerTick = 1;
+      PERF.pathPerTick = 1;
+      PERF.ruinPerTick = 1;
+      PERF.spawnCooldownMul = 1.3;
+      MAX_ACTIVE = 60;
+    } else if (tier === "veryHigh") {
+      PERF.forestOctaves = 3;
+      PERF.forestAttempts = 8;
+      PERF.forestNearSamples = 3;
+      PERF.vegCap = 28;
+      PERF.forestCap = 3;
+      PERF.bigVegCap = 5;
+      PERF.terrainCap = 5;
+      PERF.ruinCap = 3;
+      PERF.detailCap = 14;
+      PERF.pathCap = 4;
+      PERF.vegPerTick = 2;
+      PERF.detailPerTick = 1;
+      PERF.terrainPerTick = 1;
+      PERF.pathPerTick = 2;
+      PERF.ruinPerTick = 1;
+      PERF.spawnCooldownMul = 1.0;
+      MAX_ACTIVE = 100;
+    } else {
+      // high
+      PERF.forestOctaves = 3;
+      PERF.forestAttempts = 6;
+      PERF.forestNearSamples = 2;
+      PERF.vegCap = 20;
+      PERF.forestCap = 2;
+      PERF.bigVegCap = 4;
+      PERF.terrainCap = 4;
+      PERF.ruinCap = 2;
+      PERF.detailCap = 10;
+      PERF.pathCap = 3;
+      PERF.vegPerTick = 2;
+      PERF.detailPerTick = 1;
+      PERF.terrainPerTick = 1;
+      PERF.pathPerTick = 1;
+      PERF.ruinPerTick = 1;
+      PERF.spawnCooldownMul = 1.1;
+      MAX_ACTIVE = 75;
+    }
+    // Allow explicit overrides
+    if (q.vegCap != null) PERF.vegCap = q.vegCap;
+    if (q.forestCap != null) PERF.forestCap = q.forestCap;
+  }
 
   /**
    * Golden rules: never on Bolt, never block the path, spawn ahead on flanks.
@@ -60,23 +167,47 @@
     killVeg: 34,
   };
 
-  /** Per-frame / live caps — high score ≠ spam everything */
+  /** Per-frame / live caps — read from PERF (graphics tier) */
   const SPAWN_BUDGET = {
-    pathCap: 4,
-    terrainCap: 6,
-    landmarkCap: 2,
-    // Small flora can be rich; big structures stay rare
-    vegCap: 36, // stalks / flowers / bushes / clusters / vines / floaters
-    bigVegCap: 5, // single trees / spires / canopy (not full forests)
-    forestCap: 3, // full forest systems — keep low
-    ruinCap: 3,
-    detailCap: 14,
-    // max successful spawns of each type per update tick
-    pathPerTick: 2,
-    terrainPerTick: 1,
-    vegPerTick: 4, // mostly small plants fill these slots
-    ruinPerTick: 1,
-    detailPerTick: 1,
+    get pathCap() {
+      return PERF.pathCap;
+    },
+    get terrainCap() {
+      return PERF.terrainCap;
+    },
+    get landmarkCap() {
+      return Math.min(2, PERF.terrainCap);
+    },
+    get vegCap() {
+      return PERF.vegCap;
+    },
+    get bigVegCap() {
+      return PERF.bigVegCap;
+    },
+    get forestCap() {
+      return PERF.forestCap;
+    },
+    get ruinCap() {
+      return PERF.ruinCap;
+    },
+    get detailCap() {
+      return PERF.detailCap;
+    },
+    get pathPerTick() {
+      return PERF.pathPerTick;
+    },
+    get terrainPerTick() {
+      return PERF.terrainPerTick;
+    },
+    get vegPerTick() {
+      return PERF.vegPerTick;
+    },
+    get ruinPerTick() {
+      return PERF.ruinPerTick;
+    },
+    get detailPerTick() {
+      return PERF.detailPerTick;
+    },
   };
 
   // ---------------------------------------------------------------------------
@@ -299,55 +430,57 @@
     }
   }
 
+  /** Spatial cache — forestDensity is multi-fBm; avoid recompute per plant */
+  const _forestDensCache = new Map();
+  const FOREST_DENS_CELL = 10;
+
   /**
    * Domain-warped forest density field at world XZ.
    * Returns 0..1 — high = thick grove, low = clearing.
-   * Double warp (Inigo Quilez style) so forests feel grown, not circular blobs.
-   *
-   * @param {number} worldX
-   * @param {number} worldZ
-   * @param {string} [biomeId]
-   * @param {number} [sprintScore] 0..1+ meaningful density / score
+   * Cached on a coarse grid for FPS; still organic at forest scale.
    */
   function forestDensity(worldX, worldZ, biomeId, sprintScore) {
     const score = Math.max(0, Math.min(1.4, sprintScore || 0));
-    const baseWarp = forestWarpStrength(biomeId || "crystalNebula");
-    // Stronger warp at high sprint → more organic dramatic shapes
-    const strength = baseWarp * (0.75 + score * 0.65);
+    const bid = biomeId || "crystalNebula";
+    const qx = Math.floor(worldX / FOREST_DENS_CELL);
+    const qz = Math.floor(worldZ / FOREST_DENS_CELL);
+    const qs = Math.round(score * 4);
+    const key = bid + "|" + qx + "|" + qz + "|" + qs;
+    const hit = _forestDensCache.get(key);
+    if (hit != null) return hit;
 
-    // Forest-scale coords (large coherent regions)
+    const baseWarp = forestWarpStrength(bid);
+    const strength = baseWarp * (0.75 + score * 0.65);
     const px = worldX * 0.008;
     const pz = worldZ * 0.008;
-    const oct = score > 0.75 ? 4 : 3;
+    const oct = Math.max(2, Math.min(4, PERF.forestOctaves | 0));
 
     // First domain warp
     const q1 = fbm(px, pz, oct);
     const q2 = fbm(px + 5.2, pz + 1.3, oct);
 
-    // Second domain warp
-    const r1 = fbm(px + strength * q1 + 1.7, pz + strength * q2 + 9.2, oct);
-    const r2 = fbm(px + strength * q1 + 8.3, pz + strength * q2 + 2.8, oct);
-
-    // Final density evaluation
-    let d = fbm(px + strength * r1, pz + strength * r2, Math.min(5, oct + 1));
-
-    // Soft remap → usable forest range (clearings + thickets)
-    // fbm ~0..1; push mid-tones into readable density
-    d = THREE.MathUtils.smoothstep(-0.02, 0.72, d);
-
-    // Biome personality on the field
-    if (biomeId === "emberVoid") {
-      // denser thickets, fewer open clearings
-      d = THREE.MathUtils.smoothstep(0.05, 0.78, d * 1.08);
-    } else if (biomeId === "whisperStars") {
-      // more open / dreamy gaps
-      d *= 0.88;
-    } else if (biomeId === "jadeCanopy") {
-      d = Math.min(1, d * 1.06);
+    // Second warp — skip on Low (single warp still looks organic)
+    let d;
+    if (PERF.tier === "low") {
+      d = fbm(px + strength * q1 * 0.85, pz + strength * q2 * 0.85, oct);
+    } else {
+      const r1 = fbm(px + strength * q1 + 1.7, pz + strength * q2 + 9.2, oct);
+      const r2 = fbm(px + strength * q1 + 8.3, pz + strength * q2 + 2.8, oct);
+      d = fbm(px + strength * r1, pz + strength * r2, oct);
     }
 
-    // Mild score lift so high dens fills slightly more (still leaves clearings)
+    d = THREE.MathUtils.smoothstep(-0.02, 0.72, d);
+    if (bid === "emberVoid") {
+      d = THREE.MathUtils.smoothstep(0.05, 0.78, d * 1.08);
+    } else if (bid === "whisperStars") {
+      d *= 0.88;
+    } else if (bid === "jadeCanopy") {
+      d = Math.min(1, d * 1.06);
+    }
     d = Math.min(1, d * (0.92 + score * 0.12));
+
+    if (_forestDensCache.size > 1800) _forestDensCache.clear();
+    _forestDensCache.set(key, d);
     return d;
   }
 
@@ -355,31 +488,30 @@
    * Peak forest density near a point (samples center + flanks) — for spawn decisions.
    */
   function forestDensityNear(worldX, worldZ, biomeId, sprintScore, yaw) {
-    const d0 = forestDensity(worldX, worldZ, biomeId, sprintScore);
+    const n = PERF.forestNearSamples | 0;
+    let best = forestDensity(worldX, worldZ, biomeId, sprintScore);
+    if (n <= 1) return best;
     const fx = Math.sin(yaw || 0);
     const fz = Math.cos(yaw || 0);
     const rx = Math.cos(yaw || 0);
     const rz = -Math.sin(yaw || 0);
-    // Sample side-forward pockets (where forests actually spawn)
-    const d1 = forestDensity(
-      worldX + fx * 18 + rx * 28,
-      worldZ + fz * 18 + rz * 28,
-      biomeId,
-      sprintScore
+    best = Math.max(
+      best,
+      forestDensity(worldX + fx * 18 + rx * 28, worldZ + fz * 18 + rz * 28, biomeId, sprintScore)
     );
-    const d2 = forestDensity(
-      worldX + fx * 18 - rx * 28,
-      worldZ + fz * 18 - rz * 28,
-      biomeId,
-      sprintScore
-    );
-    const d3 = forestDensity(
-      worldX + fx * 40 + rx * 22,
-      worldZ + fz * 40 + rz * 22,
-      biomeId,
-      sprintScore
-    );
-    return Math.max(d0, d1, d2, d3);
+    if (n >= 3) {
+      best = Math.max(
+        best,
+        forestDensity(worldX + fx * 18 - rx * 28, worldZ + fz * 18 - rz * 28, biomeId, sprintScore)
+      );
+    }
+    if (n >= 4) {
+      best = Math.max(
+        best,
+        forestDensity(worldX + fx * 40 + rx * 22, worldZ + fz * 40 + rz * 22, biomeId, sprintScore)
+      );
+    }
+    return best;
   }
 
   // ---------------------------------------------------------------------------
@@ -2817,7 +2949,8 @@
          * minDens: ground < mid < canopy < mega
          */
         function pickForestSpot(i, salt, radMul, minDens, allowCorridor) {
-          for (let attempt = 0; attempt < 10; attempt++) {
+          const maxTry = Math.max(2, PERF.forestAttempts | 0);
+          for (let attempt = 0; attempt < maxTry; attempt++) {
             const p = ringPos(i * 13 + attempt * 3, salt + attempt * 0.37, radMul);
             if (!allowCorridor && inCorridor(p.x, p.z)) continue;
             if (allowCorridor && inCorridor(p.x, p.z) && p.nR < 0.8) continue;
@@ -4452,11 +4585,11 @@
       this._fluxBoost = 0; // temporary density amp (howl / resonance events)
 
       this.pools = {
-        path: new ObjectPool(createPathMesh, "path", 12),
-        terrain: new ObjectPool(createTerrainMesh, "terrain", 18),
-        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 48),
-        ruin: new ObjectPool(createRuinMesh, "ruin", 10),
-        detail: new ObjectPool(createDetailMesh, "detail", 28),
+        path: new ObjectPool(createPathMesh, "path", 8),
+        terrain: new ObjectPool(createTerrainMesh, "terrain", 10),
+        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 28),
+        ruin: new ObjectPool(createRuinMesh, "ruin", 6),
+        detail: new ObjectPool(createDetailMesh, "detail", 16),
       };
       // So pools can emergency-clear corridor solids using run yaw
       Object.keys(this.pools).forEach((k) => {
@@ -6417,8 +6550,10 @@
           // terrain/ruin only via dedicated branches above
         }
 
-        // Slightly slower ticks at high dens so world stays readable
-        this.cooldown = THREE.MathUtils.lerp(0.22, 0.1, Math.min(1, density * 0.85));
+        // Slightly slower ticks at high dens; PERF multiplies for Low/Med FPS
+        this.cooldown =
+          THREE.MathUtils.lerp(0.22, 0.1, Math.min(1, density * 0.85)) *
+          (PERF.spawnCooldownMul || 1);
       }
 
       if (any && Math.random() < 0.28 + density * 0.15) {
@@ -6482,6 +6617,9 @@
     }
   }
 
+  // Sensible default until game.js applies the selected graphics tier
+  setProceduralQuality({ tier: "medium" });
+
   global.BoltProcedural = {
     MeaningfulSprintScore: MeaningfulSprintScore,
     TrajectoryPredictor: TrajectoryPredictor,
@@ -6516,6 +6654,8 @@
     forestDensity: forestDensity,
     forestDensityNear: forestDensityNear,
     forestWarpStrength: forestWarpStrength,
+    setProceduralQuality: setProceduralQuality,
+    PERF: PERF,
     VEG_TYPES: VEG_TYPES,
   };
 })(typeof window !== "undefined" ? window : globalThis);

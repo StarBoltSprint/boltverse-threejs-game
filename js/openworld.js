@@ -13,13 +13,17 @@
   if (!THREE) return;
 
   const CHUNK = 80;       // world units per chunk
-  let VIEW = 3;           // chunks radius (7x7) — high graphics default
-  let GROUND_SEGS = 44;   // heightfield density
-  let DRESS_MUL = 1.1;    // ground dressing density
-  const MAX_CHUNKS = 80;
-  /** GPU vertex displacement for ground (option 4). Low tier can force CPU bake only. */
-  let GPU_HEIGHT = true;
-  let GPU_OCTAVES = 4; // 3–5; more = prettier + more GPU cost
+  let VIEW = 2;           // chunks radius — start modest (quality raises this)
+  let GROUND_SEGS = 28;   // heightfield density
+  let DRESS_MUL = 0.55;   // ground dressing density
+  let MAX_CHUNKS = 40;    // hard live chunk cap (was 80 — too heavy)
+  /** Max new chunks built per ensureAround call (spreads hitch across frames) */
+  let MAX_BUILDS_PER_TICK = 2;
+  /** Ahead streaming length beyond VIEW (0 = no extra wedge on Low) */
+  let AHEAD_EXTRA = 1;
+  /** GPU vertex displacement for ground. Off on Low/Med for FPS. */
+  let GPU_HEIGHT = false;
+  let GPU_OCTAVES = 3; // 2–5
 
   /** Scale definitions (lore order) */
   const SCALE_STAGES = [
@@ -708,13 +712,39 @@
       let sampleN = 0;
 
       const useGpu = GPU_HEIGHT;
+      // Cache height + biome samples — surfaceHeight/sampleBiome are expensive per vertex
+      const hCache = new Map();
+      const bCache = new Map();
+      const quant = segs <= 18 ? 6 : segs <= 28 ? 4 : 2.5;
+      function qKey(wx, wz) {
+        return Math.round(wx / quant) + ":" + Math.round(wz / quant);
+      }
+      function heightCached(wx, wz) {
+        const k = qKey(wx, wz);
+        let h = hCache.get(k);
+        if (h == null) {
+          h = surfaceHeight(wx, wz, score);
+          hCache.set(k, h);
+        }
+        return h;
+      }
+      function biomeCached(wx, wz) {
+        if (!global.BoltProcedural || !global.BoltProcedural.sampleBiome) return null;
+        const k = qKey(wx, wz);
+        let b = bCache.get(k);
+        if (b === undefined) {
+          b = global.BoltProcedural.sampleBiome(wx, wz, 0);
+          bCache.set(k, b);
+        }
+        return b;
+      }
+
       for (let i = 0; i < pos.count; i++) {
         const lx = pos.getX(i);
         const lz = pos.getZ(i);
         const wx = ox + CHUNK * 0.5 + lx;
         const wz = oz + CHUNK * 0.5 + lz;
-        // Always sample CPU height for colors / shade; mesh Y is GPU or baked
-        let h = surfaceHeight(wx, wz, score);
+        let h = heightCached(wx, wz);
         if (useGpu) {
           pos.setY(i, 0); // GPU vertex shader applies full height
         } else {
@@ -725,8 +755,8 @@
         let cr = 0.15;
         let cg = 0.22;
         let cb = 0.32;
-        if (global.BoltProcedural && global.BoltProcedural.sampleBiome) {
-          const b = global.BoltProcedural.sampleBiome(wx, wz, 0);
+        const b = biomeCached(wx, wz);
+        if (b) {
           if (mixColorFn && b.mix) {
             mixColorFn(b.mix, "ground", tmpCol);
             cr = tmpCol.r;
@@ -738,7 +768,6 @@
             cg = tmpCol.g;
             cb = tmpCol.b;
           }
-          // Vote for chunk material (dominant still drives albedo map)
           const pid = b.primary && b.primary.id;
           if (pid) {
             biomeVotes[pid] = (biomeVotes[pid] || 0) + 1;
@@ -926,13 +955,17 @@
       const crystGeo = new THREE.ConeGeometry(0.1, 0.48, 5);
       const plateGeo = new THREE.CylinderGeometry(0.55, 0.7, 0.08, 7);
 
-      // Counts scale with quality dressMul (art style unchanged)
+      // Counts scale with quality dressMul — Low can drop almost all props
       const dm = DRESS_MUL;
-      const nPebble = Math.max(8, Math.floor((42 + seed * 22) * dm));
-      const nTuft = Math.max(6, Math.floor((28 + hash2(cx + 1, cz) * 18) * dm));
-      const nCryst = Math.max(4, Math.floor((18 + hash2(cz + 2, cx) * 14) * dm));
-      const nPlate = Math.max(3, Math.floor((10 + hash2(cx * 3, cz * 5) * 8) * dm));
-      const nBoulder = Math.max(1, Math.floor((3 + seed * 3) * Math.min(1, dm + 0.2)));
+      if (dm < 0.12) {
+        return; // ultra-light: bare ground only
+      }
+      const nPebble = Math.max(0, Math.floor((28 + seed * 16) * dm));
+      const nTuft = Math.max(0, Math.floor((18 + hash2(cx + 1, cz) * 12) * dm));
+      const nCryst = dm < 0.35 ? 0 : Math.max(0, Math.floor((12 + hash2(cz + 2, cx) * 10) * dm));
+      const nPlate = dm < 0.4 ? 0 : Math.max(0, Math.floor((8 + hash2(cx * 3, cz * 5) * 6) * dm));
+      const nBoulder =
+        dm < 0.5 ? 0 : Math.max(0, Math.floor((2 + seed * 2) * Math.min(1, dm)));
 
       const dummy = new THREE.Object3D();
       const CLEAR_CITADEL = 22; // keep gate / throne plaza readable
@@ -1096,21 +1129,16 @@
         fdz = Math.cos(opts.lookYaw);
       }
 
+      // Spread chunk mesh builds across frames (main hitch source when sprinting)
+      let buildsLeft = MAX_BUILDS_PER_TICK;
+      const pending = [];
+
       const needed = new Set();
       function need(ix, iz) {
         const k = this._key(ix, iz);
         needed.add(k);
         if (!this.chunks.has(k)) {
-          const ch = this._buildChunk(ix, iz, scoreBake);
-          this.group.add(ch);
-          this.chunks.set(k, {
-            group: ch,
-            cx: ix,
-            cz: iz,
-            scoreBake: scoreBake,
-            biomeId: ch.userData && ch.userData.biomeId,
-            gpuHeight: !!(ch.userData && ch.userData.gpuHeight),
-          });
+          pending.push({ ix: ix, iz: iz, k: k });
         }
       }
       const self = this;
@@ -1126,24 +1154,50 @@
         }
       }
 
-      // Directional extension: extra chunks ahead (and slight flanks)
-      if (fdx !== 0 || fdz !== 0) {
-        const ahead = view + 2; // always look farther forward than sideways
+      // Directional extension: lighter on Low (AHEAD_EXTRA can be 0)
+      if ((fdx !== 0 || fdz !== 0) && AHEAD_EXTRA > 0) {
+        const ahead = view + AHEAD_EXTRA;
         for (let step = 1; step <= ahead; step++) {
           const bx = Math.round(fdx * step);
           const bz = Math.round(fdz * step);
           add(cx + bx, cz + bz);
-          // side-forward wedges so the corridor is full
-          const px = -bz; // perpendicular
+          const px = -bz;
           const pz = bx;
-          if (step <= view + 1) {
+          if (step <= view && AHEAD_EXTRA >= 1) {
             add(cx + bx + Math.round(px * 0.5), cz + bz + Math.round(pz * 0.5));
             add(cx + bx - Math.round(px * 0.5), cz + bz - Math.round(pz * 0.5));
           }
-          if (step <= view) {
+          if (step <= view && AHEAD_EXTRA >= 2) {
             add(cx + bx + px, cz + bz + pz);
             add(cx + bx - px, cz + bz - pz);
           }
+        }
+      }
+
+      // Build nearest pending chunks first (under feet, then ahead)
+      if (pending.length) {
+        pending.sort(function (a, b) {
+          const da = Math.abs(a.ix - cx) + Math.abs(a.iz - cz);
+          const db = Math.abs(b.ix - cx) + Math.abs(b.iz - cz);
+          // Prefer ahead of motion
+          const aa = fdx || fdz ? (a.ix - cx) * fdx + (a.iz - cz) * fdz : 0;
+          const ab = fdx || fdz ? (b.ix - cx) * fdx + (b.iz - cz) * fdz : 0;
+          return da - db || ab - aa;
+        });
+        for (let pi = 0; pi < pending.length && buildsLeft > 0; pi++) {
+          const p = pending[pi];
+          if (this.chunks.has(p.k)) continue;
+          const ch = this._buildChunk(p.ix, p.iz, scoreBake);
+          this.group.add(ch);
+          this.chunks.set(p.k, {
+            group: ch,
+            cx: p.ix,
+            cz: p.iz,
+            scoreBake: scoreBake,
+            biomeId: ch.userData && ch.userData.biomeId,
+            gpuHeight: !!(ch.userData && ch.userData.gpuHeight),
+          });
+          buildsLeft--;
         }
       }
 
@@ -1322,11 +1376,13 @@
     setQuality(q) {
       if (!q) return;
       if (q.view != null) VIEW = Math.max(1, Math.min(4, q.view | 0));
-      if (q.groundSegs != null) GROUND_SEGS = Math.max(20, Math.min(48, q.groundSegs | 0));
-      if (q.dressMul != null) DRESS_MUL = Math.max(0.35, Math.min(1.4, q.dressMul));
-      // GPU height: Low can disable for weak iGPUs; octaves scale with tier
+      if (q.groundSegs != null) GROUND_SEGS = Math.max(12, Math.min(48, q.groundSegs | 0));
+      if (q.dressMul != null) DRESS_MUL = Math.max(0.05, Math.min(1.4, q.dressMul));
       if (q.gpuHeight != null) GPU_HEIGHT = !!q.gpuHeight;
       if (q.gpuOctaves != null) GPU_OCTAVES = Math.max(2, Math.min(5, q.gpuOctaves | 0));
+      if (q.maxChunks != null) MAX_CHUNKS = Math.max(12, Math.min(80, q.maxChunks | 0));
+      if (q.maxBuilds != null) MAX_BUILDS_PER_TICK = Math.max(1, Math.min(6, q.maxBuilds | 0));
+      if (q.aheadExtra != null) AHEAD_EXTRA = Math.max(0, Math.min(3, q.aheadExtra | 0));
       if (q.rebuild) this.rebuildStreaming();
     }
 

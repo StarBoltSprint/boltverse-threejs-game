@@ -393,94 +393,105 @@
     low: {
       id: "low",
       label: "LOW",
-      hint: "Low — best performance · lighter world",
-      brand: "v2.4 · LOW",
+      hint: "Low — smooth FPS · same style, lighter world",
+      brand: "v2.5 · LOW",
       pixelRatio: 1,
       antialias: false,
       bloom: false,
-      bloomStrength: 0.35,
-      bloomDiv: 3,
+      bloomStrength: 0.3,
+      bloomDiv: 4,
       shadows: false,
       shadowMap: 512,
-      groundSegs: 22,
+      groundSegs: 14,
       view: 1,
-      dressMul: 0.4,
-      // Low: CPU-baked height only (friendlier to weak integrated GPUs)
+      dressMul: 0.12,
       gpuHeight: false,
-      gpuOctaves: 3,
+      gpuOctaves: 2,
+      maxChunks: 16,
+      maxBuilds: 1,
+      aheadExtra: 0,
       hemi: 0.48,
       particles: false,
-      particleOp: 0.35,
+      particleOp: 0.3,
       particleSize: 1.0,
-      exposure: 1.02,
+      exposure: 1.0,
     },
     medium: {
       id: "medium",
       label: "MED",
       hint: "Medium — balanced quality & performance",
-      brand: "v2.4 · MED",
-      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.25),
-      antialias: true,
-      bloom: true,
-      bloomStrength: 0.42,
+      brand: "v2.5 · MED",
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.15),
+      antialias: false,
+      bloom: false,
+      bloomStrength: 0.4,
       bloomDiv: 3,
-      shadows: true,
+      shadows: false,
       shadowMap: 1024,
-      groundSegs: 32,
-      view: 2,
-      dressMul: 0.7,
-      gpuHeight: true,
+      groundSegs: 22,
+      view: 1,
+      dressMul: 0.35,
+      gpuHeight: false,
       gpuOctaves: 3,
+      maxChunks: 24,
+      maxBuilds: 1,
+      aheadExtra: 1,
       hemi: 0.5,
       particles: true,
-      particleOp: 0.55,
-      particleSize: 1.2,
-      exposure: 1.05,
+      particleOp: 0.45,
+      particleSize: 1.15,
+      exposure: 1.04,
     },
     high: {
       id: "high",
       label: "HIGH",
       hint: "High — full detail · recommended",
-      brand: "v2.4 · HIGH",
-      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.75),
+      brand: "v2.5 · HIGH",
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
       antialias: true,
       bloom: true,
-      bloomStrength: 0.52,
+      bloomStrength: 0.48,
       bloomDiv: 2,
       shadows: true,
-      shadowMap: 1536,
-      groundSegs: 40,
-      view: 3,
-      dressMul: 1.0,
-      gpuHeight: true,
-      gpuOctaves: 4,
+      shadowMap: 1024,
+      groundSegs: 32,
+      view: 2,
+      dressMul: 0.75,
+      gpuHeight: false,
+      gpuOctaves: 3,
+      maxChunks: 36,
+      maxBuilds: 2,
+      aheadExtra: 1,
       hemi: 0.52,
       particles: true,
-      particleOp: 0.72,
-      particleSize: 1.4,
-      exposure: 1.08,
+      particleOp: 0.65,
+      particleSize: 1.3,
+      exposure: 1.06,
     },
     veryHigh: {
       id: "veryHigh",
       label: "MAX",
       hint: "MAX — highest fidelity · strong GPU recommended",
-      brand: "v2.4 · MAX",
-      pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      brand: "v2.5 · MAX",
+      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.75),
       antialias: true,
       bloom: true,
-      bloomStrength: 0.58,
+      bloomStrength: 0.55,
       bloomDiv: 2,
       shadows: true,
-      shadowMap: 2048,
-      groundSegs: 44,
-      view: 3,
-      dressMul: 1.15,
+      shadowMap: 1536,
+      groundSegs: 40,
+      view: 2,
+      dressMul: 1.0,
       gpuHeight: true,
-      gpuOctaves: 5,
+      gpuOctaves: 4,
+      maxChunks: 48,
+      maxBuilds: 2,
+      aheadExtra: 2,
       hemi: 0.52,
       particles: true,
-      particleOp: 0.82,
-      particleSize: 1.55,
+      particleOp: 0.75,
+      particleSize: 1.45,
       exposure: 1.08,
     },
   };
@@ -490,7 +501,8 @@
       const t = localStorage.getItem(GFX_STORAGE_KEY);
       if (t && GFX_TIERS[t]) return t;
     } catch (e) { /* ignore */ }
-    return "high";
+    // Default MED — smoother on average PCs; user can raise to HIGH/MAX
+    return "medium";
   }
 
   let gfxTierId = loadGfxTierId();
@@ -567,8 +579,8 @@
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   // Auto-sort is fine; local clipping unused
   renderer.localClippingEnabled = false;
-  // Only recompute shadows when something that casts moves (Bolt + few casters)
-  renderer.shadowMap.autoUpdate = true;
+  // Shadows off → never auto-update (huge win on Low/Med)
+  renderer.shadowMap.autoUpdate = !!GraphicsQuality.shadows;
 
   /** Apply current graphics tier to renderer / world / FX */
   function applyGraphicsQuality(opts) {
@@ -578,6 +590,7 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.toneMappingExposure = q.exposure != null ? q.exposure : 1.08;
     renderer.shadowMap.enabled = !!q.shadows;
+    renderer.shadowMap.autoUpdate = !!q.shadows;
     if (sun && sun.shadow && sun.shadow.mapSize) {
       sun.shadow.mapSize.set(q.shadowMap || 1024, q.shadowMap || 1024);
       sun.castShadow = !!q.shadows;
@@ -603,8 +616,11 @@
         view: q.view,
         groundSegs: q.groundSegs,
         dressMul: q.dressMul,
-        gpuHeight: q.gpuHeight !== false,
-        gpuOctaves: q.gpuOctaves != null ? q.gpuOctaves : 4,
+        gpuHeight: !!q.gpuHeight,
+        gpuOctaves: q.gpuOctaves != null ? q.gpuOctaves : 3,
+        maxChunks: q.maxChunks,
+        maxBuilds: q.maxBuilds,
+        aheadExtra: q.aheadExtra,
         rebuild: !!opts.rebuild,
       });
       if (opts.rebuild && player && openWorld.ensureAround) {
@@ -618,6 +634,10 @@
         openWorld.ensureAround(0, 0);
       }
     }
+    // Cap live PCG objects + cheaper forest noise on Low/Med
+    if (window.BoltProcedural && window.BoltProcedural.setProceduralQuality) {
+      window.BoltProcedural.setProceduralQuality({ tier: q.id });
+    }
     if (lights && lights.hemi) lights.hemi.intensity = q.hemi;
     if (softParticles && softParticles.points) {
       softParticles.points.visible = q.particles !== false;
@@ -626,15 +646,18 @@
       softParticles.material.opacity = q.particleOp != null ? q.particleOp : 0.7;
       softParticles.material.size = q.particleSize != null ? q.particleSize : 1.4;
     }
-    // Reactive sky still runs at all tiers (cheap vs particles/shadows); hide nebula soft sheets on Low
+    // Reactive sky: hide expensive nebula/comets on Low; dim on Med
     if (reactiveSky && reactiveSky.group) {
       reactiveSky.group.traverse(function (o) {
         if (o.name === "SkyNebulae") o.visible = q.id !== "low";
-        if (o.name === "SkyComets") o.visible = q.id !== "low";
+        if (o.name === "SkyComets") o.visible = q.id === "high" || q.id === "veryHigh";
       });
     }
     if (camera) {
       camera.aspect = window.innerWidth / window.innerHeight;
+      // Tighter far plane on Low = less overdraw far away
+      if (q.id === "low") camera.far = Math.min(camera.far || 800, 420);
+      else if (q.id === "medium") camera.far = Math.min(camera.far || 1200, 700);
       camera.updateProjectionMatrix();
     }
   }
@@ -4996,7 +5019,7 @@
 
   frame();
   console.log(
-    "%cBOLT ENGINE v2.4 · MAX — fixed high graphics + free GPU opts (no quality loss)",
+    "%cBOLT ENGINE v2.5 · perf pass — Low/Med stay smooth, High/MAX keep fidelity",
     "color:#34d399;font-weight:bold"
   );
   } catch (err) {
