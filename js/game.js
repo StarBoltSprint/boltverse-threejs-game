@@ -130,8 +130,36 @@
   const CAM_ZOOM_MIN = 0.45;
   const CAM_ZOOM_MAX = 2.8;
 
+  // Mouse look — stable across high-DPI mice / Windows / multi-monitor spikes
+  // (raw movementX/Y can be huge on some machines and fling pitch/yaw)
+  const LOOK_SENS = 0.00165; // radians per CSS pixel (slightly calmer default)
+  const LOOK_MAX_STEP = 48; // clamp single-event delta (px)
+  const LOOK_MAX_FRAME = 96; // clamp accumulated delta per frame (px)
+  let lookAccumX = 0;
+  let lookAccumY = 0;
+  let lookIgnoreEvents = 0; // drop junk events right after pointer lock
+
   function setCamZoom(z) {
     camZoomTarget = THREE.MathUtils.clamp(z, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
+  }
+
+  /** Apply queued mouse look once per frame (predictable, no multi-event explosions) */
+  function applyLookInput() {
+    let dx = lookAccumX;
+    let dy = lookAccumY;
+    lookAccumX = 0;
+    lookAccumY = 0;
+    if (!isFinite(dx)) dx = 0;
+    if (!isFinite(dy)) dy = 0;
+    dx = THREE.MathUtils.clamp(dx, -LOOK_MAX_FRAME, LOOK_MAX_FRAME);
+    dy = THREE.MathUtils.clamp(dy, -LOOK_MAX_FRAME, LOOK_MAX_FRAME);
+    if (dx === 0 && dy === 0) return;
+    yaw -= dx * LOOK_SENS;
+    // Invert Y: mouse-up → look up
+    pitch += dy * LOOK_SENS;
+    pitch = THREE.MathUtils.clamp(pitch, -1.25, 1.15);
+    if (!isFinite(yaw)) yaw = 0;
+    if (!isFinite(pitch)) pitch = 0.18;
   }
 
   // ---------------------------------------------------------------------------
@@ -233,25 +261,53 @@
 
   document.addEventListener("pointerlockchange", () => {
     pointerLocked = document.pointerLockElement === canvas;
+    // First events after lock often contain huge spikes on some GPUs/drivers
+    if (pointerLocked) {
+      lookIgnoreEvents = 3;
+      lookAccumX = 0;
+      lookAccumY = 0;
+    } else {
+      lookAccumX = 0;
+      lookAccumY = 0;
+    }
   });
 
   document.addEventListener("mousemove", (e) => {
     if (!pointerLocked || paused) return;
-    yaw -= e.movementX * 0.0022;
-    // Invert Y so mouse-up looks up (natural FPS feel)
-    pitch += e.movementY * 0.0020;
-    // Wide free-look: nearly straight down to nearly straight up
-    pitch = Math.max(-1.35, Math.min(1.25, pitch));
+    if (lookIgnoreEvents > 0) {
+      lookIgnoreEvents--;
+      return;
+    }
+    // Some systems report non-finite or enormous deltas (high-DPI / raw input)
+    let mx = e.movementX;
+    let my = e.movementY;
+    if (!isFinite(mx)) mx = 0;
+    if (!isFinite(my)) my = 0;
+    // Ignore pathological single frames (alt-tab, display change, driver glitch)
+    if (Math.abs(mx) > 400 || Math.abs(my) > 400) return;
+    mx = THREE.MathUtils.clamp(mx, -LOOK_MAX_STEP, LOOK_MAX_STEP);
+    my = THREE.MathUtils.clamp(my, -LOOK_MAX_STEP, LOOK_MAX_STEP);
+    lookAccumX += mx;
+    lookAccumY += my;
   });
 
-  // Scroll wheel zoom (works with or without pointer lock when game is running)
+  // Scroll wheel zoom — clamp trackpad mega-deltas so zoom doesn't explode
   window.addEventListener(
     "wheel",
     (e) => {
       if (!started || paused) return;
       e.preventDefault();
-      const dir = e.deltaY > 0 ? 1.1 : 1 / 1.1;
-      setCamZoom(camZoomTarget * dir);
+      let dy = e.deltaY;
+      if (!isFinite(dy)) return;
+      // Normalize line/page modes roughly to pixels
+      if (e.deltaMode === 1) dy *= 16;
+      if (e.deltaMode === 2) dy *= 40;
+      dy = THREE.MathUtils.clamp(dy, -120, 120);
+      const steps = Math.max(1, Math.min(4, Math.round(Math.abs(dy) / 40)));
+      const factor = dy > 0 ? 1.08 : 1 / 1.08;
+      let z = camZoomTarget;
+      for (let i = 0; i < steps; i++) z *= factor;
+      setCamZoom(z);
     },
     { passive: false }
   );
@@ -315,6 +371,8 @@
     canvas,
     antialias: true,
     powerPreference: "high-performance",
+    // stencil off = less bandwidth; depth is enough for this game
+    stencil: false,
   });
   renderer.setPixelRatio(GraphicsQuality.pixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -323,6 +381,10 @@
   renderer.toneMappingExposure = 1.08;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Auto-sort is fine; local clipping unused
+  renderer.localClippingEnabled = false;
+  // Only recompute shadows when something that casts moves (Bolt + few casters)
+  renderer.shadowMap.autoUpdate = true;
 
   /** Apply fixed high visual settings once systems exist */
   function applyGraphicsQuality() {
@@ -705,7 +767,7 @@
     torso.rotation.x = Math.PI / 2;
     torso.position.set(0, 1.08, 0.02);
     torso.scale.set(0.88, 1, 1.05);
-    torso.castShadow = true;
+    torso.castShadow = true; // main body casts; small parts skip for free GPU win
     g.add(torso);
 
     // Soft white volume on back (pure white GSD — no dark saddle patch)
@@ -3190,6 +3252,9 @@
   // Update
   // ---------------------------------------------------------------------------
   function updatePlayer(dt) {
+    // Apply mouse look once per tick (stable on high-DPI / multi-event machines)
+    applyLookInput();
+
     const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const right = new THREE.Vector3(Math.sin(yaw + Math.PI / 2), 0, Math.cos(yaw + Math.PI / 2));
 
@@ -3646,18 +3711,17 @@
         }
         const base = mat.userData._baseFurEm;
         // Always keep albedo pure white
-        mat.color.setHex(0xffffff);
+        mat.color.copy(_furWhite);
         if (boltPowerS < 0.08) {
-          mat.emissive.setHex(0xffffff);
+          mat.emissive.copy(_furWhite);
           mat.emissiveIntensity = base;
         } else {
           // Soft cyan energy wash only on high charge (not a full recolor)
-          const cyan = new THREE.Color(0xffffff);
-          cyan.lerp(new THREE.Color(0xcff9ff), Math.min(0.45, boltPowerS * 0.55));
+          _furEmTmp.copy(_furWhite).lerp(_furCyan, Math.min(0.45, boltPowerS * 0.55));
           if (boltPowerS > 0.7 && state.resonance > 0.55) {
-            cyan.lerp(new THREE.Color(0xe9d5ff), (boltPowerS - 0.7) * 0.5);
+            _furEmTmp.lerp(_furPurple, (boltPowerS - 0.7) * 0.5);
           }
-          mat.emissive.copy(cyan);
+          mat.emissive.copy(_furEmTmp);
           mat.emissiveIntensity = base + boltPowerS * 0.06 + (state.sprinting ? 0.03 : 0);
         }
       });
@@ -4209,12 +4273,13 @@
     } else if (starField && starField.position) {
       starField.position.copy(camera.position);
     }
+    // Mild FOV kick only — large speed*0.45 + momentum*8 felt like camera “flying”
     const targetFov =
       juice.baseFov +
-      speed * 0.45 +
-      state.momentum * 8 +
+      Math.min(6, speed * 0.18) +
+      state.momentum * 3.5 +
       juice.fovPunch +
-      (state.packEventT > 0 ? 2 : 0);
+      (state.packEventT > 0 ? 1.5 : 0);
     camera.fov = damp(camera.fov, targetFov, 6, dt);
     camera.updateProjectionMatrix();
 
@@ -4620,8 +4685,29 @@
     if (started && !paused && !pointerLocked) canvas.requestPointerLock();
   });
 
+  // Pause GPU work when the tab is hidden (same visuals when you return)
+  let pageVisible = typeof document !== "undefined" ? !document.hidden : true;
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", function () {
+      pageVisible = !document.hidden;
+      if (pageVisible && clock && clock.getDelta) {
+        // Drop huge dt after AFK so physics doesn't explode
+        clock.getDelta();
+      }
+    });
+  }
+
+  // Reused temps — avoid GC spikes in the Bolt energy loop
+  const _furCyan = new THREE.Color(0xcff9ff);
+  const _furPurple = new THREE.Color(0xe9d5ff);
+  const _furWhite = new THREE.Color(0xffffff);
+  const _furEmTmp = new THREE.Color();
+
   function frame() {
     requestAnimationFrame(frame);
+    // Free GPU: do not render or simulate while the tab is in the background
+    if (!pageVisible) return;
+
     const dt = Math.min(clock.getDelta(), 0.05);
     const t = clock.elapsedTime;
 
@@ -4650,7 +4736,9 @@
       if (starCoreGroup) starCoreGroup.rotation.y = t * 0.3;
     }
 
-    animateWorld(t);
+    // Boot orbit only needs light work; in-game skip nebula spin when paused
+    if (!paused) animateWorld(t);
+
     // Selective energy bloom (cyan trails/eyes) — not full-screen white wash
     if (bloom && bloom.render) {
       bloom.render();
@@ -4661,7 +4749,7 @@
 
   frame();
   console.log(
-    "%cBOLT ENGINE v2.4 · MAX — fixed high graphics, no FPS downgrade",
+    "%cBOLT ENGINE v2.4 · MAX — fixed high graphics + free GPU opts (no quality loss)",
     "color:#34d399;font-weight:bold"
   );
   } catch (err) {

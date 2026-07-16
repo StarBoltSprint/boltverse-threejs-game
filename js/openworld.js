@@ -455,6 +455,24 @@
       this._dressChunk(g, cx, cz, ox, oz, biomeId);
 
       g.position.set(ox + CHUNK * 0.5, 0, oz + CHUNK * 0.5);
+      // Static chunk: freeze matrices (same look, less CPU every frame)
+      g.traverse(function (obj) {
+        if (obj.isMesh || obj.isInstancedMesh || obj.isGroup) {
+          obj.matrixAutoUpdate = false;
+          obj.updateMatrix();
+          if (obj.isInstancedMesh && obj.instanceMatrix) {
+            obj.instanceMatrix.needsUpdate = true;
+          }
+        }
+        // Dressing never needs to cast shadows (expensive, low visual gain)
+        if (obj.isMesh && obj !== mesh) {
+          obj.castShadow = false;
+          obj.receiveShadow = obj.receiveShadow !== false ? obj.receiveShadow : false;
+        }
+      });
+      g.matrixAutoUpdate = false;
+      g.updateMatrix();
+      g.updateMatrixWorld(true);
       return g;
     }
 

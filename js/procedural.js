@@ -850,6 +850,11 @@
         e = this.live.shift();
         e.release();
       }
+      e._prevFade = null;
+      if (e.mesh) {
+        e.mesh.matrixAutoUpdate = true;
+        e.mesh.userData._matFrozen = false;
+      }
       this.live.push(e);
       return e;
     }
@@ -898,16 +903,52 @@
         const f = e.fade;
         const isPath = e.mesh.userData && e.mesh.userData.isPathEntity;
         const isVeg = e.kind === "vegetation" || (e.mesh.userData && e.mesh.userData.kind === "vegetation");
-        if (isPath) {
-          // Paths stay full scale — only opacity fades (otherwise tubes vanish)
-          e.mesh.scale.setScalar(1);
-          e.mesh.position.y = e.homeY;
-        } else {
-          e.mesh.scale.setScalar(Math.max(0.01, e.baseScale * (0.12 + 0.88 * f)));
-          e.mesh.position.y = e.homeY - (1 - f) * 0.9;
+        const fadeDirty =
+          e._prevFade == null ||
+          Math.abs(f - e._prevFade) > 0.002 ||
+          e.fadingOut ||
+          f < 0.99;
+        e._prevFade = f;
+
+        if (fadeDirty) {
+          e.mesh.matrixAutoUpdate = true;
+          if (isPath) {
+            // Paths stay full scale — only opacity fades (otherwise tubes vanish)
+            e.mesh.scale.setScalar(1);
+            e.mesh.position.y = e.homeY;
+          } else {
+            e.mesh.scale.setScalar(Math.max(0.01, e.baseScale * (0.12 + 0.88 * f)));
+            e.mesh.position.y = e.homeY - (1 - f) * 0.9;
+          }
+          // Opacity only while fading (full-visible entities skip full traverse)
+          e.mesh.traverse((c) => {
+            if (c.material) {
+              const mats = Array.isArray(c.material) ? c.material : [c.material];
+              mats.forEach((m) => {
+                const base = m.userData.baseOpacity != null ? m.userData.baseOpacity : 1;
+                m.opacity = f * base;
+                m.depthWrite = !isPath && m.opacity > 0.92;
+              });
+            }
+            // Small foliage/detail never cast shadows (looks the same, big GPU save)
+            if (c.isMesh && (isVeg || e.kind === "detail")) {
+              c.castShadow = false;
+            }
+          });
+        } else if (!isVeg && e.kind !== "detail" && e.kind !== "ruin") {
+          // Fully solid static prop: freeze world matrix
+          if (!e.mesh.userData._matFrozen) {
+            e.mesh.matrixAutoUpdate = false;
+            e.mesh.updateMatrix();
+            e.mesh.updateMatrixWorld(true);
+            e.mesh.userData._matFrozen = true;
+          }
         }
-        // Gentle sway for vegetation (organic life)
+
+        // Gentle sway for vegetation (organic life) — only live plants
         if (isVeg && e.mesh.userData.swayParts && e.mesh.userData.swayParts.length) {
+          e.mesh.matrixAutoUpdate = true;
+          e.mesh.userData._matFrozen = false;
           e.mesh.userData.swayT = (e.mesh.userData.swayT || 0) + dt;
           const t = e.mesh.userData.swayT;
           e.mesh.userData.swayParts.forEach((part, pi) => {
@@ -918,8 +959,10 @@
             part.rotation.x = Math.cos(ph * 0.7) * amt * 0.5;
           });
         }
-        // Resonance pulse on ruin runes / loot gems
+        // Resonance pulse on ruin runes / loot gems (skip full traverse when solid)
         if (e.kind === "ruin" && e.mesh.userData.pulseParts && e.mesh.userData.pulseParts.length) {
+          e.mesh.matrixAutoUpdate = true;
+          e.mesh.userData._matFrozen = false;
           e.mesh.userData.pulseT = (e.mesh.userData.pulseT || 0) + dt;
           const pt = e.mesh.userData.pulseT;
           e.mesh.userData.pulseParts.forEach((part, pi) => {
@@ -940,6 +983,8 @@
         }
         // DetailGenerator — float, spin, pulse, drifting motes
         if (e.kind === "detail") {
+          e.mesh.matrixAutoUpdate = true;
+          e.mesh.userData._matFrozen = false;
           const ud = e.mesh.userData;
           ud.animT = (ud.animT || 0) + dt;
           const t = ud.animT;
@@ -984,18 +1029,11 @@
             attr.needsUpdate = true;
           }
         }
-        e.mesh.traverse((c) => {
-          if (c.material) {
-            const mats = Array.isArray(c.material) ? c.material : [c.material];
-            mats.forEach((m) => {
-              const base = m.userData.baseOpacity != null ? m.userData.baseOpacity : 1;
-              m.opacity = f * base;
-              m.depthWrite = !isPath && m.opacity > 0.92;
-            });
-          }
-        });
 
         if (e.fadingOut && e.fade <= 0.001) {
+          e.mesh.userData._matFrozen = false;
+          e.mesh.matrixAutoUpdate = true;
+          e._prevFade = null;
           e.release();
           this.live.splice(i, 1);
           this.free.push(e);
