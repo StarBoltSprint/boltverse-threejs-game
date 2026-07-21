@@ -17,36 +17,37 @@
     return;
   }
 
-  const SPAWN_THRESHOLD = 0.65;
-  const FADE_IN_SEC = 0.85;
+  // Gate opens earlier so WorldInfluence can grow the world before Deep Flow
+  const SPAWN_THRESHOLD = 0.28;
+  const FADE_IN_SEC = 0.55;
   const FADE_OUT_SEC = 2.5;
-  let MAX_ACTIVE = 80;
+  let MAX_ACTIVE = 140;
   const WORLD_R = 1e9; // open world — no practical edge
-  const LOOKAHEAD_MIN = 2.0; // seconds — generate farther ahead
-  const LOOKAHEAD_MAX = 5.0;
+  const LOOKAHEAD_MIN = 2.5; // seconds — generate farther ahead
+  const LOOKAHEAD_MAX = 6.5;
 
   /**
    * Runtime perf knobs (set by graphics tier via setProceduralQuality).
-   * Low keeps the same art rules, just fewer live objects / cheaper noise.
+   * Caps raised so Jade Canopy can actually fill at Storm Peak.
    */
   const PERF = {
     tier: "high",
     forestOctaves: 3,
-    forestAttempts: 6,
-    forestNearSamples: 2,
-    vegCap: 22,
-    forestCap: 2,
-    bigVegCap: 4,
-    terrainCap: 4,
-    ruinCap: 2,
-    detailCap: 10,
-    pathCap: 3,
-    vegPerTick: 2,
+    forestAttempts: 8,
+    forestNearSamples: 3,
+    vegCap: 56,
+    forestCap: 6,
+    bigVegCap: 10,
+    terrainCap: 5,
+    ruinCap: 3,
+    detailCap: 14,
+    pathCap: 4,
+    vegPerTick: 4,
     detailPerTick: 1,
     terrainPerTick: 1,
     pathPerTick: 1,
     ruinPerTick: 1,
-    spawnCooldownMul: 1.15,
+    spawnCooldownMul: 0.85,
   };
 
   function setProceduralQuality(q) {
@@ -54,12 +55,13 @@
     const tier = q.tier || q.id || "high";
     PERF.tier = tier;
     if (tier === "low") {
+      // Integrated GPU / dual-core friendly
       PERF.forestOctaves = 2;
       PERF.forestAttempts = 3;
       PERF.forestNearSamples = 1;
-      PERF.vegCap = 10;
-      PERF.forestCap = 1;
-      PERF.bigVegCap = 2;
+      PERF.vegCap = 14;
+      PERF.forestCap = 2;
+      PERF.bigVegCap = 3;
       PERF.terrainCap = 2;
       PERF.ruinCap = 1;
       PERF.detailCap = 5;
@@ -69,63 +71,64 @@
       PERF.terrainPerTick = 1;
       PERF.pathPerTick = 1;
       PERF.ruinPerTick = 1;
-      PERF.spawnCooldownMul = 1.55;
-      MAX_ACTIVE = 40;
+      PERF.spawnCooldownMul = 1.65;
+      MAX_ACTIVE = 42;
     } else if (tier === "medium") {
+      // Laptops / HD 620 class — forests still appear, not a slideshow
       PERF.forestOctaves = 2;
       PERF.forestAttempts = 4;
       PERF.forestNearSamples = 2;
-      PERF.vegCap = 16;
-      PERF.forestCap = 2;
-      PERF.bigVegCap = 3;
+      PERF.vegCap = 22;
+      PERF.forestCap = 3;
+      PERF.bigVegCap = 4;
       PERF.terrainCap = 3;
       PERF.ruinCap = 2;
-      PERF.detailCap = 8;
+      PERF.detailCap = 7;
       PERF.pathCap = 3;
       PERF.vegPerTick = 1;
       PERF.detailPerTick = 1;
       PERF.terrainPerTick = 1;
       PERF.pathPerTick = 1;
       PERF.ruinPerTick = 1;
-      PERF.spawnCooldownMul = 1.3;
+      PERF.spawnCooldownMul = 1.35;
       MAX_ACTIVE = 60;
     } else if (tier === "veryHigh") {
-      PERF.forestOctaves = 3;
-      PERF.forestAttempts = 8;
+      PERF.forestOctaves = 4;
+      PERF.forestAttempts = 10;
       PERF.forestNearSamples = 3;
-      PERF.vegCap = 48;
-      PERF.forestCap = 4;
-      PERF.bigVegCap = 7;
-      PERF.terrainCap = 5;
-      PERF.ruinCap = 3;
-      PERF.detailCap = 14;
-      PERF.pathCap = 4;
+      PERF.vegCap = 64;
+      PERF.forestCap = 7;
+      PERF.bigVegCap = 12;
+      PERF.terrainCap = 6;
+      PERF.ruinCap = 4;
+      PERF.detailCap = 16;
+      PERF.pathCap = 5;
       PERF.vegPerTick = 4;
-      PERF.detailPerTick = 1;
+      PERF.detailPerTick = 2;
       PERF.terrainPerTick = 1;
       PERF.pathPerTick = 2;
       PERF.ruinPerTick = 1;
-      PERF.spawnCooldownMul = 0.95;
-      MAX_ACTIVE = 120;
+      PERF.spawnCooldownMul = 0.8;
+      MAX_ACTIVE = 150;
     } else {
-      // high — richer flora; path + Bolt exclusion still hard
+      // high — discrete GPU
       PERF.forestOctaves = 3;
-      PERF.forestAttempts = 6;
+      PERF.forestAttempts = 7;
       PERF.forestNearSamples = 2;
-      PERF.vegCap = 36;
-      PERF.forestCap = 3;
-      PERF.bigVegCap = 6;
+      PERF.vegCap = 40;
+      PERF.forestCap = 5;
+      PERF.bigVegCap = 8;
       PERF.terrainCap = 4;
-      PERF.ruinCap = 2;
+      PERF.ruinCap = 3;
       PERF.detailCap = 12;
-      PERF.pathCap = 3;
+      PERF.pathCap = 4;
       PERF.vegPerTick = 3;
       PERF.detailPerTick = 1;
       PERF.terrainPerTick = 1;
       PERF.pathPerTick = 1;
       PERF.ruinPerTick = 1;
-      PERF.spawnCooldownMul = 1.0;
-      MAX_ACTIVE = 95;
+      PERF.spawnCooldownMul = 0.95;
+      MAX_ACTIVE = 110;
     }
     // Allow explicit overrides
     if (q.vegCap != null) PERF.vegCap = q.vegCap;
@@ -133,39 +136,38 @@
   }
 
   /**
-   * Golden rules: never on Bolt, never block the path, spawn ahead on flanks.
-   * Paths may sit closer (they ARE the run lane).
+   * Clearance — keep path readable but allow a living forest near the run.
+   * (Old values killed / banned almost everything within camera view.)
    */
   const CLEAR = {
-    player: 36, // hard bubble — Bolt always readable
-    corridorHalf: 14, // clean highway half-width (meters)
-    corridorAhead: 100,
-    corridorBehind: 18,
-    detailMin: 36,
-    detailClear: 34,
-    detailMax: 70,
-    // Small flora can sit nearer path edges (still outside player bubble + corridor)
-    vegMin: 34,
-    vegClear: 32,
-    vegBigMin: 48,
-    vegBigClear: 46,
-    forestMin: 64,
-    forestClear: 60,
-    forestMax: 110,
-    terrainMin: 48,
-    terrainClear: 46,
-    terrainMax: 95,
-    landmarkPlayer: 58,
-    ruinNestPlayer: 52,
-    ruinDistantMin: 110,
-    ruinDistantClear: 100,
-    // Fade-out if anything drifts into view bubble
-    killTerrain: 38,
-    killLandmark: 48,
-    killForest: 42,
-    killRuin: 40,
-    killDetail: 30,
-    killVeg: 34,
+    player: 14, // bubble — Bolt readable, flora can frame him
+    corridorHalf: 7, // highway half-width
+    corridorAhead: 70,
+    corridorBehind: 12,
+    detailMin: 16,
+    detailClear: 14,
+    detailMax: 80,
+    vegMin: 16,
+    vegClear: 14,
+    vegBigMin: 22,
+    vegBigClear: 20,
+    forestMin: 28,
+    forestClear: 24,
+    forestMax: 140,
+    terrainMin: 26,
+    terrainClear: 24,
+    terrainMax: 110,
+    landmarkPlayer: 32,
+    ruinNestPlayer: 30,
+    ruinDistantMin: 70,
+    ruinDistantClear: 60,
+    // Only dissolve solids that are truly underfoot / blocking the highway
+    killTerrain: 12,
+    killLandmark: 16,
+    killForest: 10, // was 42 — forests vanished as you approached
+    killRuin: 14,
+    killDetail: 10,
+    killVeg: 9, // was 34 — plants deleted before you could see them
   };
 
   /** Per-frame / live caps — read from PERF (graphics tier) */
@@ -239,14 +241,16 @@
     const d = THREE.MathUtils.clamp(density || 0, 0, 1.6);
     const bid = biomeId || "crystalNebula";
 
-    // Biome density personality
+    // Biome density personality — Jade is the luxuriant forest showcase
     let vegBias = 1;
     let sparseBias = 1;
-    if (bid === "jadeCanopy" || bid === "crystalNebula") vegBias = 1.25;
+    if (bid === "jadeCanopy") {
+      vegBias = 1.85; // densest vegetation in the Boltverse
+      sparseBias = 0.85;
+    } else if (bid === "crystalNebula") vegBias = 1.25;
     else if (bid === "rosePulse") vegBias = 1.15;
     else if (bid === "emberVoid") vegBias = 0.95;
     else if (bid === "whisperStars") {
-      // Still dreamy clearings, but not a barren starfield highway
       vegBias = 1.05;
       sparseBias = 1.15;
     } else if (bid === "frostGlacier") {
@@ -258,7 +262,7 @@
     let terrainBias = 1;
     if (bid === "emberVoid" || bid === "frostGlacier") terrainBias = 1.3;
     else if (bid === "whisperStars") terrainBias = 0.85;
-    else if (bid === "jadeCanopy") terrainBias = 0.75;
+    else if (bid === "jadeCanopy") terrainBias = 0.9; // gentle forest hills
 
     const kit = {
       band: band.id,
@@ -291,28 +295,47 @@
     };
 
     if (band.id === "sparse") {
-      kit.preferForest = false;
-      kit.forestChance = 0;
-      kit.groundCount = Math.floor(2 * vegBias);
-      kit.midCount = 0;
-      kit.canopyCount = 0;
-      kit.lifeMul = 0.9;
-      kit.pathThroughForest = false;
-      kit.preferLandmark = false;
-      kit.preferGroveRuin = false;
-      kit.corridor = 5.5;
+      // Jade: even "sparse" is a soft grove — never a barren field
+      if (bid === "jadeCanopy") {
+        kit.preferForest = d > 0.22;
+        kit.forestChance = 0.22;
+        kit.forestRadius = 7 + d * 4;
+        kit.groundCount = Math.floor(5 + d * 4);
+        kit.midCount = Math.floor(2 + d * 2);
+        kit.canopyCount = Math.floor(1 + d * 1.5);
+        kit.megaChance = 0.02;
+        kit.lifeMul = 1.05;
+        kit.scaleMul = 0.95;
+        kit.pathThroughForest = true;
+        kit.corridor = 6.0;
+      } else {
+        kit.preferForest = false;
+        kit.forestChance = 0;
+        kit.groundCount = Math.floor(2 * vegBias);
+        kit.midCount = 0;
+        kit.canopyCount = 0;
+        kit.lifeMul = 0.9;
+        kit.pathThroughForest = false;
+        kit.preferLandmark = false;
+        kit.preferGroveRuin = false;
+        kit.corridor = 5.5;
+      }
     } else if (band.id === "medium") {
       // Small groves — mini multi-layer, not full forest yet
-      kit.preferForest = d > 0.42 && Math.random() < 0.28 * vegBias;
-      kit.forestChance = 0.32 * vegBias;
-      kit.forestRadius = (6 + d * 5) * sparseBias;
+      // Jade wakes earlier: medium sprint already grows real forest systems
+      kit.preferForest =
+        bid === "jadeCanopy"
+          ? d > 0.28
+          : d > 0.42 && Math.random() < 0.28 * vegBias;
+      kit.forestChance = bid === "jadeCanopy" ? 0.55 : 0.32 * vegBias;
+      kit.forestRadius = (6 + d * 5) * sparseBias * (bid === "jadeCanopy" ? 1.25 : 1);
       kit.groundCount = Math.floor((3 + d * 4) * vegBias);
       kit.midCount = Math.floor((2 + d * 3) * vegBias);
       kit.canopyCount = Math.floor((1 + d * 1.5) * vegBias);
-      kit.megaChance = 0.015;
-      kit.corridor = 6.5; // wide clear strip through grove
-      kit.lifeMul = 1.05;
-      kit.scaleMul = 0.92;
+      kit.megaChance = bid === "jadeCanopy" ? 0.06 : 0.015;
+      kit.corridor = bid === "jadeCanopy" ? 7.0 : 6.5;
+      kit.lifeMul = bid === "jadeCanopy" ? 1.25 : 1.05;
+      kit.scaleMul = bid === "jadeCanopy" ? 1.0 : 0.92;
       kit.pathThroughForest = true;
       kit.pathLengthMul = 1.12;
       kit.pathWidthMul = 1.08;
@@ -370,11 +393,25 @@
     }
 
     // Hard caps for performance + readability (one entity = whole forest)
-    // HIGH/MAX allow denser packs; Low/Med still limited by PERF veg/forest caps
+    // Jade gets higher caps — this biome is the vegetation showcase
     const denseForest = PERF.tier === "high" || PERF.tier === "veryHigh";
-    kit.groundCount = Math.min(kit.groundCount, denseForest ? 18 : 12);
-    kit.midCount = Math.min(kit.midCount, denseForest ? 14 : 10);
-    kit.canopyCount = Math.min(kit.canopyCount, denseForest ? 12 : 8);
+    const isJadeKit = bid === "jadeCanopy";
+    kit.groundCount = Math.min(
+      kit.groundCount,
+      isJadeKit ? (denseForest ? 28 : 18) : denseForest ? 18 : 12
+    );
+    kit.midCount = Math.min(
+      kit.midCount,
+      isJadeKit ? (denseForest ? 22 : 14) : denseForest ? 14 : 10
+    );
+    kit.canopyCount = Math.min(
+      kit.canopyCount,
+      isJadeKit ? (denseForest ? 18 : 12) : denseForest ? 12 : 8
+    );
+    if (isJadeKit) {
+      kit.lifeMul = (kit.lifeMul || 1) * 1.15;
+      kit.scaleMul = Math.max(kit.scaleMul || 1, 1.05);
+    }
     return kit;
   }
 
@@ -421,7 +458,7 @@
       case "whisperStars":
         return 6.2; // soft dreamy flow
       case "jadeCanopy":
-        return 5.4;
+        return 6.8; // flowing thickets + soft clearings
       case "frostGlacier":
         return 3.6;
       case "solarGold":
@@ -479,9 +516,13 @@
     } else if (bid === "whisperStars") {
       d *= 0.88;
     } else if (bid === "jadeCanopy") {
-      d = Math.min(1, d * 1.06);
+      // Thick living canopy — domain warp denser, sprint thickens hard
+      d = Math.min(1, d * 1.18 + 0.06);
+      d = Math.min(1, d * (0.95 + score * 0.22));
     }
-    d = Math.min(1, d * (0.92 + score * 0.12));
+    if (bid !== "jadeCanopy") {
+      d = Math.min(1, d * (0.92 + score * 0.12));
+    }
 
     if (_forestDensCache.size > 1800) _forestDensCache.clear();
     _forestDensCache.set(key, d);
@@ -535,19 +576,19 @@
       // ethereal cyan/violet
       color: 0x67e8f9,
       emissive: 0x22d3ee,
-      ground: 0x0c2840,
-      groundEmissive: 0x0a3a55,
+      ground: 0x1a4a68,
+      groundEmissive: 0x145a80,
       rock: 0x6b7c99,
       plant: 0xa78bfa,
       plantEmissive: 0x7c3aed,
       path: 0x67e8f9,
       ruin: 0x94a3b8,
-      sky: 0x041830,
-      fog: 0x0c3860,
+      sky: 0x0c3a68,
+      fog: 0x1a5a88,
       ambient: 0x5eead4,
       sun: 0xa5f3fc,
       rim: 0x22d3ee,
-      fogDensity: 0.0038,
+      fogDensity: 0.0015,
       heightMul: 0.85, // smoother plains
       weights: {
         path: 0.18,
@@ -563,19 +604,19 @@
       short: "EMBER VOID",
       color: 0xf97316,
       emissive: 0xea580c,
-      ground: 0x1a0c08,
-      groundEmissive: 0x3b1208,
+      ground: 0x3a1810,
+      groundEmissive: 0x5a2010,
       rock: 0x3f2a22,
       plant: 0xfb923c,
       plantEmissive: 0xc2410c,
       path: 0xfbbf24,
       ruin: 0x78716c,
-      sky: 0x1a0804,
-      fog: 0x3a1408,
+      sky: 0x3a1810,
+      fog: 0x5a2818,
       ambient: 0xfb923c,
       sun: 0xfed7aa,
       rim: 0xef4444,
-      fogDensity: 0.0048,
+      fogDensity: 0.0018,
       heightMul: 1.55, // harsher ridges
       weights: {
         path: 0.10,
@@ -591,19 +632,19 @@
       short: "WHISPER STARS",
       color: 0xe0e7ff,
       emissive: 0xa5b4fc,
-      ground: 0x0a0a18,
-      groundEmissive: 0x141428,
+      ground: 0x1a1a38,
+      groundEmissive: 0x282850,
       rock: 0x334155,
       plant: 0xc4b5fd,
       plantEmissive: 0x8b5cf6,
       path: 0xa5b4fc,
       ruin: 0xcbd5e1,
-      sky: 0x08061a,
-      fog: 0x14102e,
+      sky: 0x18143a,
+      fog: 0x2a2450,
       ambient: 0xa5b4fc,
       sun: 0xe0e7ff,
       rim: 0xc4b5fd,
-      fogDensity: 0.0026,
+      fogDensity: 0.0012,
       heightMul: 0.55, // sparse flat dark fields
       weights: {
         path: 0.12,
@@ -620,19 +661,19 @@
       short: "SOLARIS",
       color: 0xfbbf24,
       emissive: 0xf59e0b,
-      ground: 0x1c1408,
-      groundEmissive: 0x3b2a0a,
+      ground: 0x3a2810,
+      groundEmissive: 0x5a3a12,
       rock: 0x78716c,
       plant: 0xfde68a,
       plantEmissive: 0xfbbf24,
       path: 0xfcd34d,
       ruin: 0xd6d3d1,
-      sky: 0x1e1206,
-      fog: 0x3a2208,
+      sky: 0x3a2410,
+      fog: 0x5a3818,
       ambient: 0xfbbf24,
       sun: 0xfef3c7,
       rim: 0xf59e0b,
-      fogDensity: 0.0035,
+      fogDensity: 0.0015,
       heightMul: 0.95,
       weights: { path: 0.16, terrain: 0.22, vegetation: 0.18, ruin: 0.2, detail: 0.24 },
     },
@@ -642,43 +683,46 @@
       short: "GLACIER",
       color: 0x7dd3fc,
       emissive: 0x38bdf8,
-      ground: 0x0a1628,
-      groundEmissive: 0x123048,
+      ground: 0x1a3858,
+      groundEmissive: 0x245070,
       rock: 0x94a3b8,
       plant: 0xbae6fd,
       plantEmissive: 0x7dd3fc,
       path: 0xa5f3fc,
       ruin: 0xe2e8f0,
-      sky: 0x061420,
-      fog: 0x0c2840,
+      sky: 0x0e3058,
+      fog: 0x1a4a70,
       ambient: 0x93c5fd,
       sun: 0xe0f2fe,
       rim: 0x38bdf8,
-      fogDensity: 0.0028,
+      fogDensity: 0.00125,
       heightMul: 1.35,
       weights: { path: 0.14, terrain: 0.35, vegetation: 0.08, ruin: 0.16, detail: 0.27 },
     },
     jadeCanopy: {
       id: "jadeCanopy",
-      name: "Jade Ward Canopy",
-      short: "JADE WARD",
-      color: 0x34d399,
-      emissive: 0x10b981,
-      ground: 0x061a12,
-      groundEmissive: 0x0a2e1c,
-      rock: 0x3f5a4a,
-      plant: 0x6ee7b7,
+      name: "Jade Canopy",
+      short: "JADE CANOPY",
+      // Luxuriant living forest — warm emerald, soft gold shafts
+      color: 0x4ade80,
+      emissive: 0x22c55e,
+      ground: 0x145032,
+      groundEmissive: 0x1a6a40,
+      rock: 0x4a6a55,
+      plant: 0x86efac,
       plantEmissive: 0x34d399,
-      path: 0x5eead4,
-      ruin: 0x86efac,
-      sky: 0x051a10,
-      fog: 0x0c2e1c,
-      ambient: 0x34d399,
-      sun: 0xd1fae5,
-      rim: 0x10b981,
-      fogDensity: 0.004,
-      heightMul: 1.15,
-      weights: { path: 0.12, terrain: 0.18, vegetation: 0.38, ruin: 0.12, detail: 0.2 },
+      path: 0xa7f3d0,
+      ruin: 0xa3e635,
+      sky: 0x1a5038,
+      fog: 0x2a6848,
+      ambient: 0x6ee7b7,
+      sun: 0xfef9c3,
+      rim: 0x34d399,
+      // Thin fog so distant forest hills read (not a solid blue wall)
+      fogDensity: 0.0005,
+      heightMul: 1.25,
+      // Vegetation-first biome (showcase)
+      weights: { path: 0.1, terrain: 0.12, vegetation: 0.52, ruin: 0.08, detail: 0.18 },
     },
     rosePulse: {
       id: "rosePulse",
@@ -686,19 +730,19 @@
       short: "ROSE PULSAR",
       color: 0xf472b6,
       emissive: 0xec4899,
-      ground: 0x1a0814,
-      groundEmissive: 0x3b1030,
+      ground: 0x3a1830,
+      groundEmissive: 0x5a2048,
       rock: 0x6b4a5a,
       plant: 0xf9a8d4,
       plantEmissive: 0xf472b6,
       path: 0xf0abfc,
       ruin: 0xe9d5ff,
-      sky: 0x160810,
-      fog: 0x2e0c1c,
+      sky: 0x2e1830,
+      fog: 0x4a2040,
       ambient: 0xf472b6,
       sun: 0xfce7f3,
       rim: 0xec4899,
-      fogDensity: 0.0036,
+      fogDensity: 0.0015,
       heightMul: 0.75,
       weights: { path: 0.15, terrain: 0.15, vegetation: 0.28, ruin: 0.18, detail: 0.24 },
     },
@@ -730,10 +774,18 @@
     rose: "rosePulse",
   };
 
-  /** When set (string biome id), entire surface uses that planet's biome */
-  let forceBiomeId = null;
+  /**
+   * When set (string biome id), entire surface uses that biome.
+   * Showcase mode: lock to Jade Canopy only until multi-biome returns.
+   */
+  let forceBiomeId = "jadeCanopy";
   function setForceBiome(id) {
-    forceBiomeId = id && BIOMES[id] ? id : null;
+    // null / "" clears lock; invalid ids ignored
+    if (id == null || id === "") {
+      forceBiomeId = null;
+      return;
+    }
+    forceBiomeId = BIOMES[id] ? id : forceBiomeId;
   }
   function getForceBiome() {
     return forceBiomeId;
@@ -949,12 +1001,13 @@
         if (lights.ambient) {
           lights.ambient.color.copy(this.ambient);
           if (lights.ambient.groundColor) {
-            lights.ambient.groundColor.copy(this.fog);
+            // Lift ground bounce so hemi doesn't paint terrain black
+            lights.ambient.groundColor.copy(this.fog).lerp(this.ambient, 0.35).multiplyScalar(0.85);
           }
         }
         if (lights.sun) lights.sun.color.copy(this.sun);
         if (lights.rim) lights.rim.color.copy(this.rim);
-        if (lights.fill) lights.fill.color.copy(this.ambient).multiplyScalar(0.6);
+        if (lights.fill) lights.fill.color.copy(this.ambient).multiplyScalar(0.75);
       }
       return this._target;
     }
@@ -975,8 +1028,16 @@
     }
 
     update(p, dt) {
-      this.speedFactor = THREE.MathUtils.clamp(p.speed / 26, 0, 1);
+      this.speedFactor = THREE.MathUtils.clamp(p.speed / 28, 0, 1.8);
       this.momentumFactor = THREE.MathUtils.clamp(p.momentum || 0, 0, 1);
+      // Official WorldInfluence = pow(Momentum, 1.65) — primary world reaction
+      const worldInf = THREE.MathUtils.clamp(
+        p.worldInfluence != null
+          ? p.worldInfluence
+          : Math.pow(this.momentumFactor, 1.65),
+        0,
+        1
+      );
       this.intentionFactor = THREE.MathUtils.clamp(p.intention || 0, 0, 1);
 
       if (p.speed > 2 && p.velocity) {
@@ -998,16 +1059,23 @@
       }
       this.trajectoryFactor = THREE.MathUtils.clamp(traj, 0, 1);
 
+      // WorldInfluence dominates density; intention/trajectory polish the score
       const raw =
-        this.speedFactor * 0.32 +
-        this.momentumFactor * 0.22 +
-        this.intentionFactor * 0.28 +
-        this.trajectoryFactor * 0.18;
+        worldInf * 0.58 +
+        this.speedFactor * 0.12 +
+        this.momentumFactor * 0.12 +
+        this.intentionFactor * 0.1 +
+        this.trajectoryFactor * 0.08;
 
-      const sprintMul = p.sprinting ? 1 : 0.52;
+      const sprintMul = p.sprinting ? 1 : 0.55;
       const target = THREE.MathUtils.clamp(raw * sprintMul, 0, 1);
-      const lambda = target > this.score ? 3.4 : 1.5;
+      // Track WorldInfluence tightly so forests answer Deep Flow fast
+      const lambda = target > this.score ? 4.2 : 1.8;
       this.score = THREE.MathUtils.damp(this.score, target, lambda, dt);
+      // Never sit below WorldInfluence when deep in the Zone
+      if (worldInf > this.score) {
+        this.score = THREE.MathUtils.damp(this.score, worldInf, 5.5, dt);
+      }
       return this.score;
     }
 
@@ -1015,14 +1083,19 @@
       return this.score >= SPAWN_THRESHOLD;
     }
 
-    /** 0..1 density once above gate */
+    /**
+     * 0..1 density once above gate.
+     * Soft ramp so mid Momentum already grows the world (not only Deep Flow).
+     */
     get density() {
-      if (this.score < SPAWN_THRESHOLD) return 0;
-      return THREE.MathUtils.clamp(
-        (this.score - SPAWN_THRESHOLD) / (1 - SPAWN_THRESHOLD),
+      if (this.score < SPAWN_THRESHOLD * 0.5) return 0;
+      // Map score 0.14→1.0 into density 0→1 with a floor once active
+      const t = THREE.MathUtils.clamp(
+        (this.score - SPAWN_THRESHOLD * 0.5) / (1 - SPAWN_THRESHOLD * 0.5),
         0,
         1
       );
+      return t * t * 0.35 + t * 0.65; // slightly front-loaded
     }
   }
 
@@ -2259,14 +2332,16 @@
       return VEG_TYPES.cluster;
     }
     if (biomeId === "jadeCanopy") {
-      // Rich undergrowth; giants stay rare (forests handle drama)
-      if (!preferSmall && r < 0.08) return VEG_TYPES.megaTree;
-      if (!preferSmall && r < 0.18) return VEG_TYPES.tree;
-      if (!preferSmall && r < 0.28) return VEG_TYPES.canopy;
-      if (r < 0.45) return VEG_TYPES.bush;
-      if (r < 0.65) return VEG_TYPES.cluster;
-      if (r < 0.82) return VEG_TYPES.stalk;
-      return VEG_TYPES.flower;
+      // Multi-layer living forest: giants / canopy / vines / lush undergrowth
+      if (!preferSmall && density > 0.35 && r < 0.1) return VEG_TYPES.megaTree;
+      if (!preferSmall && r < 0.22) return VEG_TYPES.tree;
+      if (!preferSmall && r < 0.36) return VEG_TYPES.canopy;
+      if (r < 0.5) return VEG_TYPES.vine; // hanging mid-layer
+      if (r < 0.62) return VEG_TYPES.bush;
+      if (r < 0.74) return VEG_TYPES.cluster;
+      if (r < 0.86) return VEG_TYPES.flower;
+      if (r < 0.94) return VEG_TYPES.stalk;
+      return VEG_TYPES.floater; // spores / pollen
     }
     if (biomeId === "frostGlacier") {
       if (!preferSmall && r < 0.18) return VEG_TYPES.spire;
@@ -2332,10 +2407,17 @@
       const isEmber = biome.id === "emberVoid";
       const isWhisper = biome.id === "whisperStars";
       const isCrystal = biome.id === "crystalNebula";
+      const isJade = biome.id === "jadeCanopy";
 
       // Density → count & spread (forests at high sprint score)
-      const countMul = 0.55 + density * 1.6 + (isCrystal ? 0.25 : 0) - (isWhisper ? 0.2 : 0);
+      const countMul =
+        0.55 +
+        density * 1.6 +
+        (isCrystal ? 0.25 : 0) +
+        (isJade ? 0.55 + density * 0.45 : 0) -
+        (isWhisper ? 0.2 : 0);
       const swayParts = [];
+      const resGlow = THREE.MathUtils.clamp((opts.resonance || 0) * 0.35 + density * 0.2, 0, 0.55);
 
       const biomeId = biome.id || "crystalNebula";
       // Shared textured mats (tier B) — fallback to flat mkMat
@@ -2349,19 +2431,20 @@
         foliageMatShared.userData.shared = true;
         foliageUnderShared = foliageMatShared.clone();
         foliageUnderShared.userData.shared = true;
-        foliageUnderShared.emissiveIntensity = 0.12;
+        foliageUnderShared.emissiveIntensity = isJade ? 0.22 + resGlow * 0.25 : 0.12;
         foliageUnderShared.opacity = 0.88;
-        foliageUnderShared.color = foliageUnderShared.color.clone().multiplyScalar(0.55);
+        foliageUnderShared.color = foliageUnderShared.color.clone().multiplyScalar(isJade ? 0.7 : 0.55);
       }
 
       function plantMat(col, eCol, eInt, rough, opac) {
-        // Cap emissive so plants sculpt under light (not neon balloons)
-        const ei = Math.min(eInt != null ? eInt : 0.35, 0.55);
+        // Jade: allow stronger bioluminescence; others stay sculpted under light
+        const cap = isJade ? 0.95 : 0.55;
+        const ei = Math.min(eInt != null ? eInt : 0.35, cap);
         return mkMat(col, {
           emissive: eCol,
-          emissiveIntensity: ei,
+          emissiveIntensity: ei + (isJade ? resGlow * 0.25 : 0),
           roughness: rough != null ? rough : 0.55,
-          metalness: isCrystal ? 0.25 : 0.08,
+          metalness: isCrystal ? 0.25 : isJade ? 0.04 : 0.08,
           opacity: opac != null ? opac : 0.95,
           flat: isEmber,
         });
@@ -2369,13 +2452,75 @@
 
       function barkMat() {
         if (barkMatShared) return barkMatShared;
-        return plantMat(isEmber ? 0x3b1c0a : isCrystal ? 0x2e1065 : isWhisper ? 0x1e1b4b : 0x2d1b0e, plantEm, 0.12, 0.92);
+        return plantMat(
+          isEmber
+            ? 0x3b1c0a
+            : isCrystal
+              ? 0x2e1065
+              : isWhisper
+                ? 0x1e1b4b
+                : isJade
+                  ? 0x1a3a28
+                  : 0x2d1b0e,
+          plantEm,
+          isJade ? 0.18 : 0.12,
+          0.92
+        );
       }
 
       function leafMat(under) {
         if (under && foliageUnderShared) return foliageUnderShared;
         if (!under && foliageMatShared) return foliageMatShared;
-        return plantMat(plantCol, plantEm, under ? 0.15 : 0.28, 0.65);
+        return plantMat(plantCol, plantEm, under ? 0.15 : isJade ? 0.42 : 0.28, 0.65);
+      }
+
+      /** Jade moss carpet disc — soft glowing ground cover */
+      function addMossPatch(pg, x, z, s) {
+        const disc = new THREE.Mesh(
+          new THREE.CircleGeometry((0.35 + Math.random() * 0.55) * s, 9),
+          plantMat(0x166534, 0x22c55e, 0.35 + resGlow * 0.4, 0.95, 0.75)
+        );
+        disc.rotation.x = -Math.PI / 2;
+        disc.position.set(x, 0.03 + Math.random() * 0.04, z);
+        pg.add(disc);
+        // Tiny luminous buds
+        if (Math.random() < 0.55 + density * 0.3) {
+          const bud = new THREE.Mesh(
+            new THREE.SphereGeometry(0.06 * s, 6, 6),
+            plantMat(0xa7f3d0, 0x34d399, 0.85, 0.25, 0.9)
+          );
+          bud.position.set(x + (Math.random() - 0.5) * 0.2 * s, 0.08 * s, z + (Math.random() - 0.5) * 0.2 * s);
+          pg.add(bud);
+        }
+      }
+
+      /** Hanging vine curtain / bridge segment (mid-layer drama) */
+      function addHangingVines(pg, x, y0, z, s, span) {
+        const strands = 2 + Math.floor(Math.random() * 3 + density * 2);
+        for (let i = 0; i < strands; i++) {
+          const len = (0.8 + Math.random() * 1.4 + density * 0.8) * s * (span || 1);
+          const vine = new THREE.Mesh(
+            new THREE.CapsuleGeometry(0.028 * s, len, 3, 5),
+            plantMat(0x15803d, 0x4ade80, 0.55 + resGlow * 0.3, 0.45, 0.92)
+          );
+          const ox = x + (Math.random() - 0.5) * 0.45 * s;
+          const oz = z + (Math.random() - 0.5) * 0.45 * s;
+          vine.position.set(ox, y0 - len * 0.45, oz);
+          vine.rotation.z = (Math.random() - 0.5) * 0.35;
+          vine.rotation.x = (Math.random() - 0.5) * 0.25;
+          pg.add(vine);
+          addSway(vine, 0.06 + Math.random() * 0.04);
+          if (Math.random() < 0.6) {
+            const leaf = new THREE.Mesh(
+              new THREE.SphereGeometry(0.1 * s, 6, 5),
+              leafMat(false)
+            );
+            leaf.position.set(ox + 0.08 * s, y0 - len * 0.7, oz);
+            leaf.scale.set(1.2, 0.45, 0.9);
+            pg.add(leaf);
+            addSway(leaf, 0.05);
+          }
+        }
       }
 
       function addSway(mesh, amount) {
@@ -2575,6 +2720,34 @@
       }
 
       function buildVine(pg, s) {
+        if (isJade) {
+          // Tall hanging curtain + optional bridge arc
+          const hangH = (2.2 + density * 2.4) * s;
+          addHangingVines(pg, 0, hangH, 0, s, 1.15);
+          if (density > 0.4 && Math.random() < 0.55) {
+            // Horizontal bridge vine (temporary path fantasy)
+            const span = (1.4 + density * 1.2) * s;
+            const bridge = new THREE.Mesh(
+              new THREE.CapsuleGeometry(0.05 * s, span, 4, 6),
+              plantMat(0x166534, 0x4ade80, 0.6 + resGlow * 0.35, 0.4, 0.9)
+            );
+            bridge.position.set(0, hangH * 0.55, 0);
+            bridge.rotation.z = Math.PI / 2 + (Math.random() - 0.5) * 0.2;
+            pg.add(bridge);
+            addSway(bridge, 0.03);
+            for (let i = 0; i < 3; i++) {
+              const leaf = new THREE.Mesh(
+                new THREE.SphereGeometry(0.12 * s, 6, 5),
+                leafMat(i % 2 === 0)
+              );
+              leaf.position.set((i - 1) * 0.35 * s, hangH * 0.55, 0.1 * s);
+              leaf.scale.set(1.3, 0.4, 0.9);
+              pg.add(leaf);
+            }
+          }
+          addMossPatch(pg, 0, 0, s * 0.9);
+          return;
+        }
         const segs = 4 + Math.floor(density * 3);
         let y = 0;
         for (let i = 0; i < segs; i++) {
@@ -2631,12 +2804,12 @@
 
       /** Alien canopy — umbrella silhouette, multi-cluster top */
       function buildCanopy(pg, s) {
-        const trunkH = (1.8 + density * 0.9) * s * (isWhisper ? 1.25 : 1);
-        const rBot = 0.16 * s;
+        const trunkH = (1.8 + density * 0.9) * s * (isWhisper ? 1.25 : isJade ? 1.2 : 1);
+        const rBot = (isJade ? 0.2 : 0.16) * s;
         addRoots(pg, s, rBot);
-        addTrunk(pg, s, trunkH, rBot, 0.07 * s, 3);
+        addTrunk(pg, s, trunkH, rBot, 0.07 * s, isJade ? 4 : 3);
         // Horizontal arms then cloudlets
-        const arms = 5 + Math.floor(density * 2);
+        const arms = (isJade ? 7 : 5) + Math.floor(density * (isJade ? 3 : 2));
         for (let i = 0; i < arms; i++) {
           const a = (i / arms) * Math.PI * 2 + seed;
           const armLen = (0.7 + Math.random() * 0.45) * s;
@@ -2680,15 +2853,21 @@
        * Biome silhouettes: Whisper tall thin · Ember scorched sparse · Crystal crystal fans · default umbrella.
        */
       function buildTree(pg, s) {
-        const tall = isWhisper ? 1.35 : isEmber ? 0.9 : 1;
-        const trunkH = (3.0 + density * 1.5) * s * tall;
-        const rBot = (isWhisper ? 0.1 : 0.16) * s;
-        const rTop = (isWhisper ? 0.05 : 0.08) * s;
+        const tall = isWhisper ? 1.35 : isEmber ? 0.9 : isJade ? 1.2 : 1;
+        const trunkH = (3.0 + density * 1.5) * s * tall * (isJade ? 1.15 : 1);
+        const rBot = (isWhisper ? 0.1 : isJade ? 0.2 : 0.16) * s;
+        const rTop = (isWhisper ? 0.05 : isJade ? 0.1 : 0.08) * s;
         addRoots(pg, s, rBot);
-        addTrunk(pg, s, trunkH, rBot, rTop, isWhisper ? 4 : 3);
+        addTrunk(pg, s, trunkH, rBot, rTop, isWhisper ? 4 : isJade ? 4 : 3);
 
         // Branch tier
-        const nBranch = isEmber ? 3 + Math.floor(density) : isWhisper ? 5 + Math.floor(density * 2) : 5 + Math.floor(density * 3);
+        const nBranch = isEmber
+          ? 3 + Math.floor(density)
+          : isWhisper
+            ? 5 + Math.floor(density * 2)
+            : isJade
+              ? 7 + Math.floor(density * 4)
+              : 5 + Math.floor(density * 3);
         for (let i = 0; i < nBranch; i++) {
           const a = (i / nBranch) * Math.PI * 2 + seed * 0.7 + (Math.random() - 0.5) * 0.4;
           const elev = trunkH * (0.45 + (i / nBranch) * 0.45);
@@ -2746,26 +2925,59 @@
         }
 
         // Apex fill clusters (cloudlets, not one sphere)
-        const apexN = isEmber ? 4 : isWhisper ? 10 : 8 + Math.floor(density * 4);
+        const apexN = isEmber
+          ? 4
+          : isWhisper
+            ? 10
+            : isJade
+              ? 12 + Math.floor(density * 8)
+              : 8 + Math.floor(density * 4);
         for (let i = 0; i < apexN; i++) {
           const a = Math.random() * Math.PI * 2;
-          const rr = Math.random() * (isWhisper ? 0.55 : 0.85) * s;
+          const rr = Math.random() * (isWhisper ? 0.55 : isJade ? 1.15 : 0.85) * s;
           addLeafCluster(
             pg,
             Math.cos(a) * rr,
             trunkH * (0.9 + Math.random() * 0.2) + Math.random() * 0.35 * s,
             Math.sin(a) * rr,
-            s * (0.45 + Math.random() * 0.4),
+            s * (0.45 + Math.random() * 0.4) * (isJade ? 1.15 : 1),
             0.025
           );
         }
 
+        // Jade: hanging vines from canopy + moss at roots + biolum fruit
+        if (isJade) {
+          addHangingVines(pg, 0, trunkH * 0.92, 0, s * 0.9, 1);
+          if (Math.random() < 0.65) addHangingVines(pg, 0.4 * s, trunkH * 0.75, -0.3 * s, s * 0.7, 0.85);
+          for (let m = 0; m < 2 + Math.floor(density * 2); m++) {
+            addMossPatch(
+              pg,
+              (Math.random() - 0.5) * 1.4 * s,
+              (Math.random() - 0.5) * 1.4 * s,
+              s * (0.6 + Math.random() * 0.5)
+            );
+          }
+          // Soft canopy under-glow (filtered light shafts feel)
+          const under = new THREE.Mesh(
+            new THREE.SphereGeometry(1.1 * s, 10, 8),
+            plantMat(0x4ade80, 0x22c55e, 0.28 + resGlow * 0.35, 0.3, 0.12)
+          );
+          under.position.y = trunkH * 0.95;
+          under.scale.set(1.4, 0.4, 1.4);
+          pg.add(under);
+        }
+
         // Optional fruit / crystal tip glow (not full canopy emissive)
-        if (density > 0.4 && Math.random() < 0.5) {
+        if (density > 0.4 && Math.random() < (isJade ? 0.7 : 0.5)) {
           for (let i = 0; i < 2 + Math.floor(density * 2); i++) {
             const fruit = new THREE.Mesh(
               new THREE.OctahedronGeometry(0.1 * s, 0),
-              plantMat(isEmber ? 0xf97316 : 0xfbbf24, isEmber ? 0xea580c : 0xf59e0b, 0.7, 0.2)
+              plantMat(
+                isEmber ? 0xf97316 : isJade ? 0xfde68a : 0xfbbf24,
+                isEmber ? 0xea580c : isJade ? 0xfbbf24 : 0xf59e0b,
+                isJade ? 0.9 : 0.7,
+                0.2
+              )
             );
             fruit.position.set(
               (Math.random() - 0.5) * 1.2 * s,
@@ -2779,12 +2991,12 @@
 
       /** Landmark mega tree — full branch architecture + fruit + soft halo */
       function buildMegaTree(pg, s) {
-        const trunkH = (5.8 + density * 2.8) * s * (isWhisper ? 1.2 : 1);
-        const rBot = 0.42 * s;
+        const trunkH = (5.8 + density * 2.8) * s * (isWhisper ? 1.2 : isJade ? 1.35 : 1);
+        const rBot = (isJade ? 0.52 : 0.42) * s;
         addRoots(pg, s * 1.15, rBot);
-        addTrunk(pg, s, trunkH, rBot, 0.16 * s, 5);
+        addTrunk(pg, s, trunkH, rBot, 0.16 * s, isJade ? 6 : 5);
 
-        const nBranch = 7 + Math.floor(density * 3);
+        const nBranch = (isJade ? 10 : 7) + Math.floor(density * (isJade ? 5 : 3));
         for (let i = 0; i < nBranch; i++) {
           const a = (i / nBranch) * Math.PI * 2 + seed;
           const elev = trunkH * (0.4 + (i / nBranch) * 0.5);
@@ -2816,24 +3028,25 @@
         }
 
         // Crown cloudlets
-        for (let i = 0; i < 16 + Math.floor(density * 6); i++) {
+        const crownN = (isJade ? 24 : 16) + Math.floor(density * (isJade ? 12 : 6));
+        for (let i = 0; i < crownN; i++) {
           const a = Math.random() * Math.PI * 2;
-          const rr = Math.random() * 1.8 * s;
+          const rr = Math.random() * (isJade ? 2.6 : 1.8) * s;
           addLeafCluster(
             pg,
             Math.cos(a) * rr,
             trunkH + Math.random() * 1.2 * s,
             Math.sin(a) * rr,
-            s * (0.7 + Math.random() * 0.55),
+            s * (0.7 + Math.random() * 0.55) * (isJade ? 1.2 : 1),
             0.018
           );
         }
 
         // Resonance fruit
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < (isJade ? 8 : 5); i++) {
           const fruit = new THREE.Mesh(
             new THREE.OctahedronGeometry(0.16 * s, 0),
-            plantMat(0xfbbf24, 0xf59e0b, 0.75, 0.2)
+            plantMat(isJade ? 0xfde68a : 0xfbbf24, isJade ? 0xfbbf24 : 0xf59e0b, isJade ? 1.0 : 0.75, 0.2)
           );
           fruit.position.set(
             (Math.random() - 0.5) * 2.2 * s,
@@ -2845,11 +3058,28 @@
         // Thin halo (mega only)
         const halo = new THREE.Mesh(
           new THREE.SphereGeometry(2.6 * s, 12, 10),
-          plantMat(accent, em, 0.28, 0.2, 0.1)
+          plantMat(accent, em, isJade ? 0.4 + resGlow * 0.3 : 0.28, 0.2, isJade ? 0.14 : 0.1)
         );
         halo.position.y = trunkH + 0.5 * s;
         halo.scale.set(1.3, 0.55, 1.3);
         pg.add(halo);
+        if (isJade) {
+          // Cascading vine drapes from ancient crown
+          for (let i = 0; i < 4; i++) {
+            const a = (i / 4) * Math.PI * 2;
+            addHangingVines(
+              pg,
+              Math.cos(a) * 1.2 * s,
+              trunkH * 0.85,
+              Math.sin(a) * 1.2 * s,
+              s * 1.1,
+              1.2
+            );
+          }
+          for (let m = 0; m < 5; m++) {
+            addMossPatch(pg, (Math.random() - 0.5) * 2.5 * s, (Math.random() - 0.5) * 2.5 * s, s);
+          }
+        }
       }
 
       /** Crystal / ice / ember spire — fan of shards on a thin trunk */
@@ -2993,19 +3223,34 @@
           } else if (biomeId === "rosePulse") {
             builder = p.nA < 0.55 ? buildFlower : buildBush;
           } else if (biomeId === "jadeCanopy") {
-            builder = p.nA < 0.4 ? buildBush : p.nA < 0.75 ? buildFlower : buildStalk;
+            // Dense undergrowth: mossy bushes, giant flowers, glowing stalks
+            builder =
+              p.nA < 0.35
+                ? buildBush
+                : p.nA < 0.65
+                  ? buildFlower
+                  : p.nA < 0.85
+                    ? buildStalk
+                    : buildCluster;
+            sc *= 1.15;
           } else if (biomeId === "solarGold") {
             builder = p.nA < 0.45 ? buildBush : buildFlower;
           } else {
             builder = p.nA < 0.35 ? buildFlower : p.nA < 0.7 ? buildStalk : buildBush;
           }
           placePlant(builder, p.x, p.z, sc);
+          // Jade: extra moss under every ground plant
+          if (isJade && Math.random() < 0.7) {
+            addMossPatch(group, p.x + (Math.random() - 0.5) * 0.6, p.z + (Math.random() - 0.5) * 0.6, sc * 0.8);
+          }
         }
 
         // --- Mid layer — needs denser pockets ---
+        // Jade: lower density threshold so mid-layer fills earlier with sprint
+        const midMin = isJade ? 0.28 : 0.36;
         const nMid = kit.midCount || 6;
         for (let i = 0; i < nMid; i++) {
-          const p = pickForestSpot(i, 2.7, 0.95, 0.36, false);
+          const p = pickForestSpot(i, 2.7, 0.95, midMin, false);
           if (!p) continue;
           let sc = 0.5 + p.nR * 0.45 + density * 0.22 + p.dens * 0.3;
           let builder = buildBush;
@@ -3015,8 +3260,10 @@
             builder = p.nA < 0.4 ? buildVine : p.nA < 0.75 ? buildFloater : buildBush;
             sc *= 1.05;
           } else if (biomeId === "jadeCanopy") {
-            builder = p.nA < 0.5 ? buildBush : buildVine;
-            sc *= 1.1;
+            // Mid = hanging vines + dense bush / fern clusters
+            builder =
+              p.nA < 0.45 ? buildVine : p.nA < 0.75 ? buildBush : buildCluster;
+            sc *= 1.25;
           } else if (biomeId === "rosePulse") {
             builder = p.nA < 0.45 ? buildVine : buildBush;
           } else if (biomeId === "frostGlacier") {
@@ -3031,9 +3278,10 @@
         }
 
         // --- Canopy — only in high-density thickets ---
+        const canopyMin = isJade ? 0.34 : 0.44;
         const nCanopy = kit.canopyCount || 5;
         for (let i = 0; i < nCanopy; i++) {
-          const p = pickForestSpot(i, 5.3, 0.88, 0.44, false);
+          const p = pickForestSpot(i, 5.3, 0.88, canopyMin, false);
           if (!p) continue;
           let sc = 0.7 + p.nR * 0.5 + density * 0.3 + p.dens * 0.4;
           let builder = buildTree;
@@ -3044,8 +3292,14 @@
             builder = p.nA < 0.4 ? buildCanopy : p.nA < 0.75 ? buildTree : buildFloater;
             sc *= 1.15;
           } else if (biomeId === "jadeCanopy") {
-            builder = p.nA < 0.35 ? buildMegaTree : p.nA < 0.7 ? buildTree : buildCanopy;
-            sc *= 1.2;
+            // Towering canopy + ancient megas dominate jade forests
+            builder =
+              p.nA < 0.28
+                ? buildMegaTree
+                : p.nA < 0.72
+                  ? buildTree
+                  : buildCanopy;
+            sc *= 1.35 + density * 0.15;
           } else if (biomeId === "frostGlacier") {
             builder = buildSpire;
             sc *= 1.05;
@@ -3061,8 +3315,8 @@
         }
 
         // --- Mega only in densest core ---
-        if (Math.random() < (kit.megaChance || 0)) {
-          const p = pickForestSpot(99, 9.1, 0.55, 0.55, false);
+        if (Math.random() < (kit.megaChance || 0) * (isJade ? 1.6 : 1)) {
+          const p = pickForestSpot(99, 9.1, 0.55, isJade ? 0.42 : 0.55, false);
           if (p) {
             const megaBuilder =
               biomeId === "frostGlacier"
@@ -3070,16 +3324,43 @@
                 : biomeId === "whisperStars"
                   ? buildCanopy
                   : buildMegaTree;
-            placePlant(megaBuilder, p.x * 0.85, p.z * 0.85, 1.1 + density * 0.3 + p.dens * 0.25);
+            placePlant(
+              megaBuilder,
+              p.x * 0.85,
+              p.z * 0.85,
+              (1.1 + density * 0.3 + p.dens * 0.25) * (isJade ? 1.2 : 1)
+            );
           }
         }
 
-        // --- Air layer: floaters in medium+ density volumes ---
-        const airN = Math.floor((isWhisper ? 6 : isCrystal ? 5 : 3) + density * 4);
+        // --- Air layer: floaters / spores / pollen ---
+        const airN = Math.floor(
+          (isJade ? 8 : isWhisper ? 6 : isCrystal ? 5 : 3) + density * (isJade ? 8 : 4)
+        );
         for (let i = 0; i < airN; i++) {
-          const p = pickForestSpot(i, 11.0, 0.7, 0.3, false);
+          const p = pickForestSpot(i, 11.0, 0.7, isJade ? 0.22 : 0.3, false);
           if (!p) continue;
           placePlant(buildFloater, p.x, p.z, 0.45 + p.dens * 0.35 + Math.random() * 0.2);
+        }
+
+        // Jade: vine bridges weave between thicket points at high sprint
+        if (isJade && density > 0.4) {
+          const bridges = 2 + Math.floor(density * 4);
+          for (let i = 0; i < bridges; i++) {
+            const p = pickForestSpot(i, 13.5, 0.75, 0.3, false);
+            if (!p) continue;
+            placePlant(buildVine, p.x, p.z, 0.7 + density * 0.4 + p.dens * 0.3);
+          }
+        }
+
+        // Jade: continuous moss carpet rings (biolum undergrowth)
+        if (isJade) {
+          const mossN = 6 + Math.floor(density * 10);
+          for (let i = 0; i < mossN; i++) {
+            const p = pickForestSpot(i, 17.0, 1.05, 0.18, true);
+            if (!p) continue;
+            addMossPatch(group, p.x, p.z, 0.7 + p.dens * 0.6 + density * 0.4);
+          }
         }
 
         // Soft ground-glow discs along corridor (path invitation — always clear)
@@ -4589,11 +4870,11 @@
       this._fluxBoost = 0; // temporary density amp (howl / resonance events)
 
       this.pools = {
-        path: new ObjectPool(createPathMesh, "path", 8),
-        terrain: new ObjectPool(createTerrainMesh, "terrain", 10),
-        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 56),
-        ruin: new ObjectPool(createRuinMesh, "ruin", 6),
-        detail: new ObjectPool(createDetailMesh, "detail", 16),
+        path: new ObjectPool(createPathMesh, "path", 10),
+        terrain: new ObjectPool(createTerrainMesh, "terrain", 12),
+        vegetation: new ObjectPool(createVegetationMesh, "vegetation", 96),
+        ruin: new ObjectPool(createRuinMesh, "ruin", 8),
+        detail: new ObjectPool(createDetailMesh, "detail", 20),
       };
       // So pools can emergency-clear corridor solids using run yaw
       Object.keys(this.pools).forEach((k) => {
@@ -5523,31 +5804,39 @@
       );
       // Sparse biomes / clearings skip more often (small plants less strict)
       const clearThresh =
-        biome.id === "whisperStars"
-          ? 0.28
-          : biome.id === "frostGlacier"
-            ? 0.38
-            : biome.id === "emberVoid"
-              ? 0.28
-              : 0.22;
+        biome.id === "jadeCanopy"
+          ? 0.02 // almost never skip plants in jade
+          : biome.id === "whisperStars"
+            ? 0.28
+            : biome.id === "frostGlacier"
+              ? 0.38
+              : biome.id === "emberVoid"
+                ? 0.28
+                : 0.18;
       // Domain-warp density needed to open a full forest system
+      // Jade: forests open very easily under WorldInfluence
       const forestDensMin =
-        biome.id === "emberVoid" ? 0.3 : biome.id === "whisperStars" ? 0.3 : 0.32;
+        biome.id === "jadeCanopy"
+          ? 0.08
+          : biome.id === "emberVoid"
+            ? 0.28
+            : biome.id === "whisperStars"
+              ? 0.28
+              : 0.28;
 
-      // Full forests only when cooldown ready, under cap, and density field is a thicket
-      const forestCap =
-        kit.band === "veryHigh"
-          ? SPAWN_BUDGET.forestCap
-          : kit.band === "high"
-            ? Math.max(2, SPAWN_BUDGET.forestCap - 1)
-            : 2;
+      // Full forests — use full forestCap at medium+ density (not only veryHigh)
+      const forestCap = SPAWN_BUDGET.forestCap;
+      const forestRoll =
+        biome.id === "jadeCanopy"
+          ? Math.max(kit.forestChance || 0.5, 0.65 + density * 0.35)
+          : kit.forestChance;
       const wantForest =
         forestCd <= 0 &&
         counts.forest < forestCap &&
-        kit.preferForest &&
-        Math.random() < kit.forestChance &&
+        (kit.preferForest || density > 0.35 || biome.id === "jadeCanopy") &&
+        Math.random() < forestRoll &&
         forestField >= forestDensMin &&
-        noiseSample > clearThresh * 0.55;
+        noiseSample > clearThresh * 0.4;
 
       let typeDef;
       if (wantForest) {
@@ -5585,13 +5874,10 @@
         typeDef.id === "canopy";
       const isBig = isForestFinal || isBigSolo;
 
-      // Forests / big trees stay far on pure flanks; small flora can line the road
+      // Forests / trees on flanks; small flora can hug the road
       const forestR = kit.forestRadius || 16;
-      const forestMinR = Math.max(
-        CLEAR.forestMin,
-        CLEAR.forestClear + forestR * 0.95
-      );
-      const smallMinR = Math.max(CLEAR.player + 2, 30);
+      const forestMinR = Math.max(CLEAR.forestMin, CLEAR.forestClear + forestR * 0.35);
+      const smallMinR = Math.max(CLEAR.player + 1, CLEAR.vegMin);
       const placed = this._placeAround(origin, yaw, {
         orbital: false,
         minR: isForestFinal
@@ -5600,26 +5886,26 @@
             ? CLEAR.vegBigMin
             : smallMinR,
         maxR: isForestFinal
-          ? Math.max(CLEAR.forestMax, forestMinR + 25) + density * 16
+          ? Math.max(CLEAR.forestMax, forestMinR + 40) + density * 28
           : isBigSolo
-            ? 75 + density * 12
-            : 58 + density * 16,
+            ? 95 + density * 20
+            : 75 + density * 22,
         preferSide: true,
         solid: isBig, // big = pure 90° flanks; small plants may sit side-forward
         strictSides: isBig,
         clearR: isForestFinal
-          ? forestMinR
+          ? CLEAR.forestClear
           : isBigSolo
             ? CLEAR.vegBigClear
             : CLEAR.player,
         corridorHalf: isForestFinal
-          ? CLEAR.corridorHalf + 6
+          ? CLEAR.corridorHalf + 2
           : isBigSolo
-            ? CLEAR.corridorHalf + 3
-            : CLEAR.corridorHalf * 0.85, // small plants hug path edges
+            ? CLEAR.corridorHalf + 1
+            : CLEAR.corridorHalf * 0.7,
         blockCorridor: true,
-        stackMin: isForestFinal ? 34 + forestR * 0.35 : isBigSolo ? 22 : 4.5,
-        jitter: isForestFinal ? 4 : isBigSolo ? 2.4 : 2.8,
+        stackMin: isForestFinal ? 18 + forestR * 0.2 : isBigSolo ? 12 : 3.2,
+        jitter: isForestFinal ? 5 : isBigSolo ? 3 : 3.2,
       });
       if (!placed) return false;
       const corridorW = isForestFinal
@@ -5675,28 +5961,35 @@
         yaw: yaw,
       });
 
+      const isJadeBiome = biome.id === "jadeCanopy";
       let scale =
-        (0.9 + density * 0.55 + (biome.id === "crystalNebula" ? 0.1 : 0)) *
+        (1.05 +
+          density * 0.7 +
+          (biome.id === "crystalNebula" ? 0.1 : 0) +
+          (isJadeBiome ? 0.45 + density * 0.35 : 0)) *
         (kit.scaleMul || 1);
-      if (typeDef.id === "forest") scale *= 1.0;
-      else if (typeDef.id === "megaTree") scale *= 1.55;
-      else if (typeDef.id === "tree") scale *= 1.3;
-      else if (typeDef.id === "spire" || typeDef.id === "canopy") scale *= 1.2;
+      if (typeDef.id === "forest") scale *= isJadeBiome ? 1.55 : 1.25;
+      else if (typeDef.id === "megaTree") scale *= isJadeBiome ? 2.1 : 1.7;
+      else if (typeDef.id === "tree") scale *= isJadeBiome ? 1.75 : 1.45;
+      else if (typeDef.id === "spire" || typeDef.id === "canopy") scale *= isJadeBiome ? 1.6 : 1.35;
+      else if (isJadeBiome) scale *= 1.35; // ground flora also larger
       const life =
-        (11 + density * 12 + (resonance || 0) * 4 + Math.random() * 4) *
-        (isForestFinal ? kit.lifeMul || 1.4 : 1);
+        (14 + density * 16 + (resonance || 0) * 5 + Math.random() * 5) *
+        (isForestFinal ? kit.lifeMul || 1.5 : 1.15);
 
       e.active = true;
       e.age = 0;
       e.life = life;
-      e.fade = isForestFinal ? 0.4 : 0.25;
+      e.fade = isForestFinal ? 0.55 : 0.4;
       e.fadingOut = false;
       e.baseScale = scale;
       e.homeY = surface;
       e.mesh.position.set(x, surface, z);
       // Forests align corridor to run yaw so paths can thread them
       e.mesh.rotation.y = isForestFinal ? yaw : Math.random() * Math.PI * 2;
-      e.mesh.scale.setScalar(scale * (isForestFinal ? 0.42 : 0.35));
+      // IMPORTANT: was 0.35/0.42 — plants looked like nubs even at Storm Peak
+      const appearMul = isForestFinal ? 0.92 : isBigSolo ? 0.88 : 0.8;
+      e.mesh.scale.setScalar(scale * appearMul * 0.55); // start small, grow in
       e.mesh.visible = true;
       e.mesh.traverse((c) => {
         if (c.material) {
@@ -5704,7 +5997,7 @@
           mats.forEach((m) => {
             m.transparent = true;
             const base = m.userData.baseOpacity != null ? m.userData.baseOpacity : 1;
-            m.opacity = 0.25 * base;
+            m.opacity = 0.35 * base;
             m.depthWrite = false;
           });
         }
@@ -5716,12 +6009,15 @@
 
       // Forests: rare & slow; small plants: snappy (fill the world, not the screen with giants)
       if (isForestFinal) {
+        // Jade forests respawn faster — entire canopies grow ahead of the sprint
+        const jade = biome.id === "jadeCanopy";
         this.forestCooldown =
-          THREE.MathUtils.lerp(0.85, 0.45, Math.min(1, density)) + Math.random() * 0.2;
-        if (density > 0.75) this.forestCooldown *= 1.15;
+          THREE.MathUtils.lerp(jade ? 0.55 : 0.85, jade ? 0.28 : 0.45, Math.min(1, density)) +
+          Math.random() * (jade ? 0.12 : 0.2);
+        if (density > 0.75 && !jade) this.forestCooldown *= 1.15;
         // Don't stall small flora after a forest lands
-        this.vegCooldown = Math.min(this.vegCooldown || 0, 0.06);
-        if (this._forestToastT <= 0 && density >= 0.55) {
+        this.vegCooldown = Math.min(this.vegCooldown || 0, jade ? 0.04 : 0.06);
+        if (this._forestToastT <= 0 && density >= (jade ? 0.4 : 0.55)) {
           const names = {
             crystalNebula: "CRYSTAL GROVE RISES",
             emberVoid: "EMBER FOREST IGNITES",
@@ -5732,8 +6028,12 @@
             rosePulse: "ROSE GARDEN BLOOMS",
           };
           const label = names[biome.id] || "THE FOREST WAKES";
-          this.toastFn(label + " — the biome answers your sprint");
-          this._forestToastT = 14;
+          this.toastFn(
+            jade
+              ? label + " — the living forest answers your sprint 🌿"
+              : label + " — the biome answers your sprint"
+          );
+          this._forestToastT = jade ? 10 : 14;
         }
         // Register footprint so path + terrain co-author this scene
         this._registerSceneFootprint({
@@ -6298,7 +6598,14 @@
       this.stats.active = active;
 
       this.cooldown = Math.max(0, this.cooldown - dt);
-      if (!this.scoreSys.active || this.cooldown > 0) return score;
+      // Gate: allow spawn once Momentum starts building (threshold lowered for showcase)
+      const wiGate =
+        packet.worldInfluence != null
+          ? packet.worldInfluence
+          : Math.pow(THREE.MathUtils.clamp(packet.momentum || 0, 0, 1), 1.65);
+      const canSpawn =
+        this.scoreSys.active || wiGate >= 0.12 || (packet.momentum || 0) >= 0.35;
+      if (!canSpawn || this.cooldown > 0) return score;
 
       // Density + flux + resonance + Core + SCALE densityMul
       const coreMul = packet.coreWorldMul != null ? packet.coreWorldMul : 0;
@@ -6309,14 +6616,21 @@
       const surfaceScale = !orbital;
       // Surface density: keep rich but not rock-flooded
       let densScale = sc.densityMul != null ? sc.densityMul : 1;
-      if (surfaceScale) densScale = Math.max(1.0, Math.min(1.2, densScale));
+      if (surfaceScale) densScale = Math.max(1.15, Math.min(1.45, densScale));
       let density = this.scoreSys.density;
+      // Official WorldInfluence drives the world — never leave Storm Peak empty
+      const wi =
+        packet.worldInfluence != null
+          ? packet.worldInfluence
+          : Math.pow(THREE.MathUtils.clamp(packet.momentum || 0, 0, 1), 1.65);
+      density = Math.max(density, wi * 0.98);
       density = THREE.MathUtils.clamp(
-        (density + this._fluxBoost * 0.35 + res * 0.12 + coreMul * 0.85) * densScale,
+        (density + this._fluxBoost * 0.4 + res * 0.15 + coreMul * 0.9) * densScale,
         0,
-        surfaceScale ? 1.25 : 1.45
+        surfaceScale ? 1.45 : 1.55
       );
       this._coreWorldMul = coreMul;
+      this._worldInfluence = wi;
 
       // Per-generator scale multipliers (lore: small gens off at cosmic scale)
       let mPath = sc.pathMul != null ? sc.pathMul : 1;
@@ -6500,18 +6814,47 @@
           }
         }
 
-        // 4. VEGETATION — rich small flora on flanks; forests/big trees self-capped
+        // 4. VEGETATION — denser at high Momentum, but respect Low/Med budgets
         if (mVeg > 0.05 && this.pools.vegetation.activeCount < B.vegCap) {
+          const isJade = biome.id === "jadeCanopy";
+          const wiBoost = this._worldInfluence || 0;
+          const lowTier = PERF.tier === "low" || PERF.tier === "medium";
           const vegChance =
-            (0.72 + density * 0.28 + (biome.weights.vegetation || 0.2) * 0.4 + coreMul * 0.15) * mVeg;
-          for (let vi = 0; vi < B.vegPerTick; vi++) {
-            if (vSpawned >= B.vegPerTick) break;
+            (0.8 +
+              density * 0.35 +
+              (biome.weights.vegetation || 0.2) * 0.45 +
+              coreMul * 0.15 +
+              wiBoost * (lowTier ? 0.2 : 0.4) +
+              (isJade ? 0.25 : 0)) *
+            mVeg;
+          // Storm Peak extras only on HIGH/MAX — Low/Med stay playable
+          const vegTicks =
+            B.vegPerTick +
+            (lowTier ? 0 : wiBoost > 0.5 ? 1 : 0) +
+            (lowTier ? 0 : wiBoost > 0.85 ? 1 : 0) +
+            (isJade && !lowTier ? 1 : 0);
+          for (let vi = 0; vi < vegTicks; vi++) {
+            if (vSpawned >= vegTicks) break;
             if (this.pools.vegetation.activeCount >= B.vegCap) break;
-            if (Math.random() < vegChance * (vi === 0 ? 1 : 0.75)) {
-              if (this._spawnOne("vegetation", pred, yaw, d * mVeg, biome, res)) {
+            if (Math.random() < vegChance * (vi === 0 ? 1.1 : 0.85)) {
+              if (this._spawnOne("vegetation", pred, yaw, Math.min(1.35, d * mVeg * (isJade ? 1.15 : 1)), biome, res)) {
                 any = true;
                 vSpawned++;
               }
+            }
+          }
+          // One forest attempt when Zone is deep (rate limited by forestCap/cooldown)
+          if (
+            isJade &&
+            wiBoost >= (lowTier ? 0.55 : 0.4) &&
+            (this.forestCooldown || 0) <= 0 &&
+            this._countVegKinds().forest < B.forestCap &&
+            Math.random() < (lowTier ? 0.35 : 0.55) + wiBoost * 0.3
+          ) {
+            this.forestCooldown = 0;
+            if (this._spawnOne("vegetation", pred, yaw, Math.min(1.35, d * mVeg * 1.15), biome, res)) {
+              any = true;
+              vSpawned++;
             }
           }
         }
@@ -6559,9 +6902,10 @@
           // terrain/ruin only via dedicated branches above
         }
 
-        // Slightly slower ticks at high dens; PERF multiplies for Low/Med FPS
+        // Fast ticks at Storm Peak so the canopy keeps filling ahead
+        const wiCd = this._worldInfluence || 0;
         this.cooldown =
-          THREE.MathUtils.lerp(0.22, 0.1, Math.min(1, density * 0.85)) *
+          THREE.MathUtils.lerp(0.14, 0.04, Math.min(1, density * 0.9 + wiCd * 0.35)) *
           (PERF.spawnCooldownMul || 1);
       }
 

@@ -13,14 +13,14 @@
   if (!THREE) return;
 
   const CHUNK = 80;       // world units per chunk
-  let VIEW = 2;           // chunks radius — start modest (quality raises this)
+  let VIEW = 3;           // chunks radius — must fill the far plane (quality raises this)
   let GROUND_SEGS = 28;   // heightfield density
   let DRESS_MUL = 0.55;   // ground dressing density
-  let MAX_CHUNKS = 40;    // hard live chunk cap (was 80 — too heavy)
+  let MAX_CHUNKS = 56;    // live chunk cap — enough for VIEW 3–4 without holes
   /** Max new chunks built per ensureAround call (spreads hitch across frames) */
   let MAX_BUILDS_PER_TICK = 2;
   /** Ahead streaming length beyond VIEW (0 = no extra wedge on Low) */
-  let AHEAD_EXTRA = 1;
+  let AHEAD_EXTRA = 2;
   /** GPU vertex displacement for ground. Off on Low/Med for FPS. */
   let GPU_HEIGHT = false;
   let GPU_OCTAVES = 3; // 2–5
@@ -31,8 +31,8 @@
       id: "paw",
       name: "PAW",
       min: 0,
-      fog: 0.0032,
-      far: 550,
+      fog: 0.00055,
+      far: 1200,
       camMul: 1,
       gravity: 1,
       airFriction: 1,
@@ -52,8 +52,8 @@
       id: "planetary",
       name: "PLANETARY",
       min: 0.22,
-      fog: 0.0018,
-      far: 1400,
+      fog: 0.0004,
+      far: 1800,
       camMul: 1.35,
       gravity: 0.72,
       airFriction: 0.75,
@@ -546,7 +546,8 @@
       );
     }
     if (biomeId === "jadeCanopy") {
-      return macro * 3.0 + mid * 1.75 + micro * 0.5 * detailMul;
+      // Gentle rolling hills under the luxuriant canopy
+      return macro * 3.4 + mid * 2.05 + micro * 0.55 * detailMul;
     }
     if (biomeId === "solarGold") {
       return Math.sin(macro * Math.PI * 2) * 1.35 + mid * 2.4 + micro * 0.4 * detailMul;
@@ -660,11 +661,11 @@
       scene.add(this.group);
 
       this.groundMat = new THREE.MeshStandardMaterial({
-        color: 0x1a3a55,
-        roughness: 0.92,
-        metalness: 0.08,
-        emissive: 0x061018,
-        emissiveIntensity: 0.08,
+        color: 0x3a6a90,
+        roughness: 0.88,
+        metalness: 0.05,
+        emissive: 0x123050,
+        emissiveIntensity: 0.2,
         flatShading: false,
       });
       // Wire grid removed (ground polish tier 1) — organic veins live in albedo only
@@ -1252,6 +1253,11 @@
     updateScale(speed, altitude, camera, scene, opts) {
       opts = opts || {};
       const momentum = opts.momentum != null ? opts.momentum : 0;
+      // Official WorldInfluence = pow(Momentum, 1.65) — stronger scale pull in Deep Flow
+      const worldInf =
+        opts.worldInfluence != null
+          ? opts.worldInfluence
+          : Math.pow(THREE.MathUtils.clamp(momentum, 0, 1), 1.65);
       const sprinting = !!opts.sprinting;
       const coreBoost = opts.coreBoost != null ? opts.coreBoost : 0; // Lightning Core helps hold scale
       const dt = opts.dt != null ? opts.dt : 0.016;
@@ -1261,10 +1267,11 @@
       const ascentCommit = !!opts.ascentCommit;
       const heightAbove = Math.max(0, altitude - surfaceY);
 
-      // Raw drivers (lore: speed + height + purpose/momentum)
+      // Raw drivers (lore: speed + height + Zone depth)
       const speedF = THREE.MathUtils.clamp(speed / 42, 0, 1.15);
       const altF = THREE.MathUtils.clamp(heightAbove / 95, 0, 1);
       const momF = THREE.MathUtils.clamp(momentum, 0, 1);
+      const wiF = THREE.MathUtils.clamp(worldInf, 0, 1);
       const coreF = THREE.MathUtils.clamp(coreBoost, 0, 1) * 0.12;
 
       // Surface mode never enters orbital prop blend (cap below orbital min 0.42)
@@ -1274,22 +1281,25 @@
       let raw;
       if (surfaceMode) {
         // SURFACE — stay grounded forever if you want; max planetary feel
-        const groundSpeed = speedF * 0.5 + momF * 0.22 + (sprinting ? 0.06 : 0);
+        const groundSpeed =
+          speedF * 0.48 + momF * 0.15 + wiF * 0.14 + (sprinting ? 0.06 : 0);
         const hopAlt = !onGround && !ascentCommit ? altF * 0.1 : 0;
         raw = Math.min(groundSpeed + hopAlt, GROUND_CAP);
       } else {
         // ASCENT COMMIT — climb scales by sustained sprint + height (not flight)
-        // Designed to hit Orbital in ~30s–2min of committed sprint-launch
+        // Deep Flow (high WorldInfluence) unlocks stronger scale climbs
         raw =
-          speedF * 0.42 +
-          altF * 0.52 +
-          momF * 0.14 +
+          speedF * 0.4 +
+          altF * 0.48 +
+          momF * 0.1 +
+          wiF * 0.18 +
           coreF;
         if (heightAbove > 8) raw += 0.1;
         if (heightAbove > 18) raw += 0.12;
         if (heightAbove > 32) raw += 0.14;
         if (heightAbove > 55) raw += 0.1;
         if (sprinting && momentum > 0.45) raw += 0.06;
+        if (wiF >= 0.75) raw += 0.05; // Deep Flow assist
         if (!sprinting) raw *= 0.55;
         raw = THREE.MathUtils.clamp(raw, 0, 1);
       }
@@ -1375,14 +1385,14 @@
      */
     setQuality(q) {
       if (!q) return;
-      if (q.view != null) VIEW = Math.max(1, Math.min(4, q.view | 0));
+      if (q.view != null) VIEW = Math.max(1, Math.min(5, q.view | 0));
       if (q.groundSegs != null) GROUND_SEGS = Math.max(12, Math.min(48, q.groundSegs | 0));
       if (q.dressMul != null) DRESS_MUL = Math.max(0.05, Math.min(1.4, q.dressMul));
       if (q.gpuHeight != null) GPU_HEIGHT = !!q.gpuHeight;
       if (q.gpuOctaves != null) GPU_OCTAVES = Math.max(2, Math.min(5, q.gpuOctaves | 0));
-      if (q.maxChunks != null) MAX_CHUNKS = Math.max(12, Math.min(80, q.maxChunks | 0));
+      if (q.maxChunks != null) MAX_CHUNKS = Math.max(16, Math.min(96, q.maxChunks | 0));
       if (q.maxBuilds != null) MAX_BUILDS_PER_TICK = Math.max(1, Math.min(6, q.maxBuilds | 0));
-      if (q.aheadExtra != null) AHEAD_EXTRA = Math.max(0, Math.min(3, q.aheadExtra | 0));
+      if (q.aheadExtra != null) AHEAD_EXTRA = Math.max(0, Math.min(4, q.aheadExtra | 0));
       if (q.rebuild) this.rebuildStreaming();
     }
 

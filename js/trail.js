@@ -36,21 +36,27 @@
     opts = opts || {};
     const score = THREE.MathUtils.clamp(opts.meaningful != null ? opts.meaningful : 0, 0, 1);
     const mom = THREE.MathUtils.clamp(opts.momentum != null ? opts.momentum : 0, 0, 1);
+    const worldInf = THREE.MathUtils.clamp(
+      opts.worldInfluence != null ? opts.worldInfluence : Math.pow(mom, 1.65),
+      0,
+      1
+    );
     const res = THREE.MathUtils.clamp(opts.resonance != null ? opts.resonance : 0, 0, 1);
     const speed = opts.speed != null ? opts.speed : 0;
     const sprinting = !!opts.sprinting;
     const stage = opts.scaleStage || "paw";
     const coreGlow = opts.coreGlow != null ? opts.coreGlow : 1;
 
-    // Combined "how hard is the Core roaring"
+    // Lightning intensity — WorldInfluence (Zone depth) is the main driver
     const power = THREE.MathUtils.clamp(
-      score * 0.45 +
-        mom * 0.25 +
-        (sprinting ? 0.15 : 0) +
-        THREE.MathUtils.clamp(speed / 36, 0, 0.25) +
-        res * 0.15,
+      worldInf * 0.5 +
+        score * 0.2 +
+        mom * 0.15 +
+        (sprinting ? 0.12 : 0) +
+        THREE.MathUtils.clamp(speed / 40, 0, 0.2) +
+        res * 0.12,
       0,
-      1.15
+      1.25
     );
 
     // Scale length multiplier

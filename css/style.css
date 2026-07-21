@@ -1426,20 +1426,61 @@ body.is-fs .fs-fab-icon::after { content: none; }
 
 #resume-btn { pointer-events: auto; }
 
-/* ===== Flow-first minimal HUD (Momentum only) ===== */
-.hud-hidden-hook { display: none !important; position: absolute; width: 0; height: 0; overflow: hidden; opacity: 0; pointer-events: none; }
+/* ===== Minimal HUD — Momentum bar only (always readable) ===== */
+.hud-hidden-hook {
+  display: none !important;
+  position: absolute !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+/* Force-hide legacy chrome even if JS rewrites className */
+#hud #scale-badge,
+#hud #spawn-stats,
+#hud #planet-nav,
+#hud #crosshair,
+#hud #landmark-markers,
+#hud #pack-banner,
+#hud #toast,
+#hud #quest-panel,
+#hud #decree-panel,
+#hud #progress-panel {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Gate text is optional noise — hide for clean momentum-only UI */
+#hud #gate-banner,
+#hud #gate-flash,
+#hud #pack-flash {
+  display: none !important;
+}
 
 #hud {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding-bottom: clamp(1.5rem, 4.5vh, 2.8rem);
+  padding-bottom: clamp(1.8rem, 5vh, 3.2rem);
+  z-index: 20;
+}
+
+#hud.hidden {
+  display: none !important;
 }
 
 #hud .momentum-dock {
-  width: min(24rem, 56vw);
-  transition: opacity 0.85s ease, transform 0.85s ease, filter 0.85s ease;
+  width: min(28rem, 72vw);
+  opacity: 1 !important;
+  transform: none !important;
+  filter: none !important;
   pointer-events: none;
+  transition: none;
 }
 
 #hud .momentum-shell {
@@ -1447,35 +1488,57 @@ body.is-fs .fs-fab-icon::after { content: none; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.55rem;
+  padding: 0.65rem 1.1rem 0.75rem;
+  border-radius: 1rem;
+  background: linear-gradient(
+    180deg,
+    rgba(6, 18, 36, 0.72) 0%,
+    rgba(4, 12, 28, 0.88) 100%
+  );
+  box-shadow:
+    0 0 0 1px rgba(61, 240, 255, 0.22),
+    0 8px 28px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* no backdrop-filter — was tanking FPS on some GPUs */
 }
 
 #hud .momentum-label {
   font-family: "Orbitron", sans-serif;
-  font-size: 0.62rem;
-  letter-spacing: 0.45em;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.42em;
   text-transform: uppercase;
-  color: rgba(180, 245, 255, 0.55);
-  text-shadow: 0 0 14px rgba(61, 240, 255, 0.4);
-  transition: opacity 0.7s ease;
+  color: rgba(200, 250, 255, 0.9);
+  text-shadow: 0 0 16px rgba(61, 240, 255, 0.65);
+  opacity: 1 !important;
+  height: auto !important;
+  overflow: visible !important;
+  margin: 0 !important;
 }
 
 #hud .momentum-track {
   position: relative;
   width: 100%;
-  height: 3px;
+  height: 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: 0 0 0 1px rgba(61, 240, 255, 0.15), inset 0 0 10px rgba(0, 0, 0, 0.35);
+  background: rgba(8, 20, 40, 0.85);
+  box-shadow:
+    0 0 0 1px rgba(61, 240, 255, 0.28),
+    inset 0 1px 4px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
 }
 
 #hud .momentum-fill {
   display: block;
   height: 100%;
   width: 0%;
+  min-width: 0;
   border-radius: 999px;
-  background: linear-gradient(90deg, #0a6a88 0%, #3df0ff 50%, #c8ffff 100%);
-  box-shadow: 0 0 12px rgba(61, 240, 255, 0.85), 0 0 28px rgba(61, 240, 255, 0.4);
+  background: linear-gradient(90deg, #0a7a98 0%, #3df0ff 45%, #e8ffff 100%);
+  box-shadow:
+    0 0 14px rgba(61, 240, 255, 0.95),
+    0 0 32px rgba(61, 240, 255, 0.55);
   transition: width 0.08s linear;
 }
 
@@ -1485,29 +1548,53 @@ body.is-fs .fs-fab-icon::after { content: none; }
   left: 0;
   top: 50%;
   width: 100%;
-  height: 16px;
+  height: 22px;
   transform: translateY(-50%);
   border-radius: 999px;
-  background: radial-gradient(ellipse at center, rgba(61, 240, 255, 0.25), transparent 72%);
-  opacity: 0.55;
+  background: radial-gradient(ellipse at center, rgba(61, 240, 255, 0.28), transparent 70%);
+  opacity: 0.7;
 }
 
-/* Momentum states � fade UI as flow deepens */
-#hud[data-flow="stillness"] .momentum-dock { opacity: 0.75; }
-#hud[data-flow="awakening"] .momentum-dock { opacity: 0.88; }
-#hud[data-flow="awakening"] .momentum-label { opacity: 0.4; }
-#hud[data-flow="awakening"] .momentum-track { height: 2.5px; }
-#hud[data-flow="flow"] .momentum-dock { opacity: 0.5; transform: translateY(2px); }
-#hud[data-flow="flow"] .momentum-label { opacity: 0; height: 0; overflow: hidden; margin: 0; }
-#hud[data-flow="flow"] .momentum-track { height: 2px; }
-#hud[data-flow="deep"] .momentum-dock {
-  opacity: 0.12;
-  transform: translateY(6px) scaleX(0.92);
-  filter: blur(0.15px);
+#hud .momentum-hint {
+  font-family: "Orbitron", sans-serif;
+  font-size: 0.58rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(180, 245, 255, 0.55);
+  min-height: 0.9rem;
+  transition: color 0.4s ease, text-shadow 0.4s ease;
 }
-#hud[data-flow="deep"] .momentum-label { opacity: 0; height: 0; overflow: hidden; }
-#hud[data-flow="deep"] .momentum-track { height: 1.5px; background: transparent; box-shadow: none; }
+
+/* Flow states — official thresholds: Stillness / Awakening / Flow / Deep Flow */
+#hud[data-flow="stillness"] .momentum-fill {
+  background: linear-gradient(90deg, #0a5a78 0%, #2ac8e0 55%, #a8f0ff 100%);
+}
+#hud[data-flow="stillness"] .momentum-hint { color: rgba(160, 200, 220, 0.5); }
+
+#hud[data-flow="awakening"] .momentum-fill {
+  background: linear-gradient(90deg, #0a7a98 0%, #3df0ff 45%, #e0ffff 100%);
+  box-shadow: 0 0 16px rgba(61, 240, 255, 1), 0 0 36px rgba(61, 240, 255, 0.55);
+}
+#hud[data-flow="awakening"] .momentum-hint {
+  color: rgba(103, 232, 249, 0.85);
+  text-shadow: 0 0 12px rgba(34, 211, 238, 0.5);
+}
+
+#hud[data-flow="flow"] .momentum-fill {
+  background: linear-gradient(90deg, #0891b2 0%, #22d3ee 40%, #a5f3fc 70%, #ffffff 100%);
+  box-shadow: 0 0 18px rgba(34, 211, 238, 1), 0 0 40px rgba(61, 240, 255, 0.65);
+}
+#hud[data-flow="flow"] .momentum-hint {
+  color: rgba(165, 243, 252, 0.95);
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.7);
+}
+
 #hud[data-flow="deep"] .momentum-fill {
-  background: linear-gradient(90deg, transparent, rgba(61, 240, 255, 0.75), transparent);
-  box-shadow: 0 0 18px rgba(61, 240, 255, 0.45);
+  background: linear-gradient(90deg, #06b6d4 0%, #67e8f9 35%, #ffffff 70%, #f0abfc 100%);
+  box-shadow: 0 0 22px rgba(103, 232, 249, 1), 0 0 48px rgba(240, 171, 252, 0.45);
+}
+#hud[data-flow="deep"] .momentum-hint {
+  color: #f0abfc;
+  text-shadow: 0 0 18px rgba(240, 171, 252, 0.85);
+  letter-spacing: 0.32em;
 }

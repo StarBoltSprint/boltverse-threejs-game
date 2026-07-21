@@ -80,15 +80,16 @@
     <span class="fs-fab-icon" aria-hidden="true">⛶</span>
   </button>
 
-  <!-- Flow-first HUD: single Lightning-Core Momentum bar (fades with deep flow) -->
+  <!-- Minimal HUD: Momentum bar only (always on-screen while playing) -->
   <div id="hud" class="hidden" data-flow="stillness">
     <div class="momentum-dock">
       <div class="momentum-shell">
         <span class="momentum-label">Momentum</span>
-        <div class="momentum-track" aria-label="Momentum">
+        <div class="momentum-track" role="progressbar" aria-label="Momentum" aria-valuemin="0" aria-valuemax="100">
           <i id="bar-momentum" class="momentum-fill"></i>
           <span class="momentum-glow" aria-hidden="true"></span>
         </div>
+        <span class="momentum-hint" id="momentum-hint">Stillness</span>
       </div>
     </div>
     <!-- Hidden hooks kept so game.js null-checks don't need a full rewrite -->
@@ -140,7 +141,7 @@
     </div>
   </div>
 
-  <canvas id="c"></canvas>
+  <canvas id="c" tabindex="0"></canvas>
 
   <!-- Local Three.js — no CDN / internet required -->
   <script src="js/three.min.js"></script>

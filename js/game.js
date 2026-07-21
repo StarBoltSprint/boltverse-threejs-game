@@ -237,8 +237,55 @@
   });
   syncFullscreenUI();
 
+  function isSprintKeyEvent(e) {
+    // Some browsers only report e.key === "Shift" (no Left/Right code)
+    return (
+      e.key === "Shift" ||
+      e.code === "ShiftLeft" ||
+      e.code === "ShiftRight" ||
+      e.code === "ControlLeft" ||
+      e.code === "ControlRight"
+    );
+  }
+  function isSprintHeld() {
+    return !!(
+      keys["ShiftLeft"] ||
+      keys["ShiftRight"] ||
+      keys["Shift"] ||
+      keys["ControlLeft"] ||
+      keys["ControlRight"] ||
+      keys._sprint
+    );
+  }
+
   window.addEventListener("keydown", (e) => {
     keys[e.code] = true;
+    if (e.key === "Shift" || e.code === "ShiftLeft" || e.code === "ShiftRight") {
+      keys["Shift"] = true;
+      keys._sprint = true;
+    }
+    if (e.code === "ControlLeft" || e.code === "ControlRight") {
+      keys._sprint = true;
+    }
+    // Keep focus for movement keys while playing (don't let browser steal Shift+W etc.)
+    if (started && !paused && isSprintKeyEvent(e)) {
+      e.preventDefault();
+    }
+    if (
+      started &&
+      !paused &&
+      (e.code === "KeyW" ||
+        e.code === "KeyA" ||
+        e.code === "KeyS" ||
+        e.code === "KeyD" ||
+        e.code === "ArrowUp" ||
+        e.code === "ArrowDown" ||
+        e.code === "ArrowLeft" ||
+        e.code === "ArrowRight" ||
+        e.code === "Space")
+    ) {
+      e.preventDefault();
+    }
     // Fullscreen (F) — works on boot screen and in-game
     if (e.code === "KeyF" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       // Don't steal F when typing in a field (none now, but safe)
@@ -271,7 +318,28 @@
       }
     }
   });
-  window.addEventListener("keyup", (e) => { keys[e.code] = false; });
+  window.addEventListener("keyup", (e) => {
+    keys[e.code] = false;
+    if (e.key === "Shift" || e.code === "ShiftLeft" || e.code === "ShiftRight") {
+      keys["Shift"] = false;
+      // Only clear sprint if no other sprint key still held
+      if (!keys["ControlLeft"] && !keys["ControlRight"]) keys._sprint = false;
+    }
+    if (e.code === "ControlLeft" || e.code === "ControlRight") {
+      if (!keys["Shift"] && !keys["ShiftLeft"] && !keys["ShiftRight"]) {
+        keys._sprint = false;
+      }
+    }
+  });
+  // Lost focus mid-sprint left Shift stuck or cleared wrongly — reset cleanly
+  window.addEventListener("blur", function () {
+    keys._sprint = false;
+    keys["Shift"] = false;
+    keys["ShiftLeft"] = false;
+    keys["ShiftRight"] = false;
+    keys["ControlLeft"] = false;
+    keys["ControlRight"] = false;
+  });
 
   document.addEventListener("pointerlockchange", () => {
     pointerLocked = document.pointerLockElement === canvas;
@@ -384,20 +452,48 @@
   // Renderer / scene — selectable graphics tiers (Low → Very High / MAX)
   // ---------------------------------------------------------------------------
   const GFX_STORAGE_KEY = "bolt_gfx_tier_v1";
+  // Integrated / low-power GPU detect (HD 620, UHD, basic adapters)
+  function isLowPowerGpu() {
+    try {
+      const c = document.createElement("canvas");
+      const gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+      if (!gl) return true;
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      const renderer = ext
+        ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || "").toLowerCase()
+        : "";
+      const cores = navigator.hardwareConcurrency || 4;
+      const mem = navigator.deviceMemory || 8; // GB when available
+      if (cores <= 4 && mem && mem <= 8) return true;
+      if (/intel|hd graphics|uhd graphics|iris\(r\) graphics 5|mali|adreno 5|powervr/.test(renderer)) {
+        // Discrete NVIDIA/AMD still match "intel" sometimes on hybrid — only flag pure iGPU-ish
+        if (/nvidia|geforce|radeon|rtx|gtx|arc a/.test(renderer) && !/intel/.test(renderer)) {
+          return false;
+        }
+        if (/nvidia|geforce|radeon|rtx|gtx/.test(renderer)) return false;
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return true;
+    }
+  }
+  const LOW_POWER_GPU = isLowPowerGpu();
+
   const GFX_TIERS = {
     low: {
       id: "low",
       label: "LOW",
-      hint: "Low — smooth FPS · same style, lighter world",
+      hint: "Low — smooth FPS · integrated GPU friendly",
       brand: "v2.5 · LOW",
       pixelRatio: 1,
       antialias: false,
       bloom: false,
-      bloomStrength: 0.3,
+      bloomStrength: 0.25,
       bloomDiv: 4,
       shadows: false,
       shadowMap: 512,
-      groundSegs: 14,
+      groundSegs: 12,
       view: 1,
       dressMul: 0.12,
       gpuHeight: false,
@@ -405,68 +501,69 @@
       maxChunks: 16,
       maxBuilds: 1,
       aheadExtra: 0,
-      hemi: 0.48,
+      hemi: 0.88,
       particles: false,
-      particleOp: 0.3,
+      particleOp: 0.25,
       particleSize: 1.0,
-      exposure: 1.0,
+      exposure: 1.15,
     },
     medium: {
       id: "medium",
       label: "MED",
-      hint: "Medium — balanced quality & performance",
+      hint: "Medium — balanced (laptop / integrated GPU)",
       brand: "v2.5 · MED",
-      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.15),
+      // Cap at 1.0 on low-power so 1080p/125% scaling doesn't explode fill-rate
+      pixelRatio: LOW_POWER_GPU ? 1 : Math.min(window.devicePixelRatio || 1, 1.1),
       antialias: false,
       bloom: false,
-      bloomStrength: 0.4,
+      bloomStrength: 0.35,
       bloomDiv: 3,
       shadows: false,
-      shadowMap: 1024,
-      groundSegs: 22,
-      view: 1,
-      dressMul: 0.35,
+      shadowMap: 512,
+      groundSegs: 16,
+      view: 2,
+      dressMul: 0.28,
       gpuHeight: false,
-      gpuOctaves: 3,
-      maxChunks: 24,
+      gpuOctaves: 2,
+      maxChunks: 28,
       maxBuilds: 1,
       aheadExtra: 1,
-      hemi: 0.5,
-      particles: true,
-      particleOp: 0.45,
-      particleSize: 1.15,
-      exposure: 1.04,
+      hemi: 0.95,
+      particles: !LOW_POWER_GPU,
+      particleOp: 0.35,
+      particleSize: 1.05,
+      exposure: 1.18,
     },
     high: {
       id: "high",
       label: "HIGH",
-      hint: "High — full detail · recommended",
+      hint: "High — discrete GPU recommended",
       brand: "v2.5 · HIGH",
-      pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
-      antialias: true,
-      bloom: true,
-      bloomStrength: 0.48,
+      pixelRatio: Math.min(window.devicePixelRatio || 1, LOW_POWER_GPU ? 1.15 : 1.5),
+      antialias: !LOW_POWER_GPU,
+      bloom: !LOW_POWER_GPU,
+      bloomStrength: 0.45,
       bloomDiv: 2,
-      shadows: true,
+      shadows: !LOW_POWER_GPU,
       shadowMap: 1024,
-      groundSegs: 32,
-      view: 2,
-      dressMul: 0.75,
+      groundSegs: 28,
+      view: 3,
+      dressMul: 0.7,
       gpuHeight: false,
       gpuOctaves: 3,
-      maxChunks: 36,
+      maxChunks: 44,
       maxBuilds: 2,
-      aheadExtra: 1,
-      hemi: 0.52,
+      aheadExtra: 2,
+      hemi: 1.0,
       particles: true,
-      particleOp: 0.65,
-      particleSize: 1.3,
-      exposure: 1.06,
+      particleOp: 0.55,
+      particleSize: 1.25,
+      exposure: 1.22,
     },
     veryHigh: {
       id: "veryHigh",
       label: "MAX",
-      hint: "MAX — highest fidelity · strong GPU recommended",
+      hint: "MAX — strong discrete GPU recommended",
       brand: "v2.5 · MAX",
       pixelRatio: Math.min(window.devicePixelRatio || 1, 1.75),
       antialias: true,
@@ -475,29 +572,40 @@
       bloomDiv: 2,
       shadows: true,
       shadowMap: 1536,
-      groundSegs: 40,
-      view: 2,
+      groundSegs: 36,
+      view: 4,
       dressMul: 1.0,
       gpuHeight: true,
       gpuOctaves: 4,
-      maxChunks: 48,
+      maxChunks: 64,
       maxBuilds: 2,
       aheadExtra: 2,
-      hemi: 0.52,
+      hemi: 1.05,
       particles: true,
-      particleOp: 0.75,
-      particleSize: 1.45,
-      exposure: 1.08,
+      particleOp: 0.7,
+      particleSize: 1.4,
+      exposure: 1.24,
     },
   };
 
   function loadGfxTierId() {
     try {
       const t = localStorage.getItem(GFX_STORAGE_KEY);
-      if (t && GFX_TIERS[t]) return t;
+      // If we detect a weak GPU and the user never changed tier this session key,
+      // prefer LOW even if an older save said MED (one-time migrate for HD 620 class)
+      if (t && GFX_TIERS[t]) {
+        // Integrated GPUs: HIGH/MAX were unplayable — drop to LOW once
+        if (LOW_POWER_GPU && (t === "high" || t === "veryHigh")) {
+          try {
+            localStorage.setItem(GFX_STORAGE_KEY, "low");
+          } catch (e2) { /* ignore */ }
+          return "low";
+        }
+        return t;
+      }
     } catch (e) { /* ignore */ }
-    // Default MED — smoother on average PCs; user can raise to HIGH/MAX
-    return "medium";
+    // Weak / integrated GPUs default LOW for playable FPS
+    return LOW_POWER_GPU ? "low" : "medium";
   }
 
   let gfxTierId = loadGfxTierId();
@@ -650,9 +758,11 @@
     }
     if (camera) {
       camera.aspect = window.innerWidth / window.innerHeight;
-      // Tighter far plane on Low = less overdraw far away
-      if (q.id === "low") camera.far = Math.min(camera.far || 800, 420);
-      else if (q.id === "medium") camera.far = Math.min(camera.far || 1200, 700);
+      // Far plane matches stream radius (shorter on Low/Med = less GPU overdraw)
+      if (q.id === "low") camera.far = 520;
+      else if (q.id === "medium") camera.far = 800;
+      else if (q.id === "high") camera.far = 1600;
+      else camera.far = 2400;
       camera.updateProjectionMatrix();
     }
   }
@@ -670,10 +780,12 @@
   })();
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x061428);
-  scene.fog = new THREE.FogExp2(0x0a2848, 0.0032);
+  // Jade-friendly horizon (not raw navy void) — biome atmo retints live
+  scene.background = new THREE.Color(0x1a5a40);
+  // Thin fog so distant chunks stay visible (was 0.00145 → blue wall)
+  scene.fog = new THREE.FogExp2(0x2a6a50, 0.00055);
 
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2500);
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
   const clock = new THREE.Clock();
 
   // Graphics polish: reactive sky (sprint/scale/biome) + haze, planets, bloom
@@ -720,7 +832,8 @@
   const ambient = lights.hemi || lights.ambient;
   const sun = lights.sun;
   const rim = lights.rim;
-  renderer.toneMappingExposure = 1.02;
+  renderer.toneMappingExposure =
+    GraphicsQuality.exposure != null ? GraphicsQuality.exposure : 1.22;
 
   const coreLight = new THREE.PointLight(0xfbbf24, 3.5, 90);
   coreLight.position.set(0, 14, 0);
@@ -763,9 +876,9 @@
     starField.name = "StarField";
     scene.add(starField);
   }
-  const baseBgColor = new THREE.Color(0x061428);
+  const baseBgColor = new THREE.Color(0x1a5a40);
   const orbitalBgColor = new THREE.Color(0x010208);
-  const baseFogColor = new THREE.Color(0x0a2848);
+  const baseFogColor = new THREE.Color(0x2a6a50);
   const orbitalFogColor = new THREE.Color(0x02040c);
   const nebulae = [];
 
@@ -1716,7 +1829,15 @@
     vel: new THREE.Vector3(),
     onGround: false,
     sprinting: false,
-    momentum: 0,
+    momentum: 0, // 0..1 Zone depth (official Momentum system)
+    worldInfluence: 0, // pow(momentum, 1.65) — world reaction driver
+    deepFlowTime: 0, // seconds held at ≥0.90 this run
+    deepFlowTimeTotal: 0, // lifetime
+    flowState: "stillness", // stillness | awakening | flow | deep
+    prevFlowState: "stillness",
+    speedFactor: 0,
+    consistencyFactor: 0,
+    sprintHoldTime: 0, // continuous sprint+move time (speed not hard-capped by momentum)
     intention: 0,
     starCore: 0,
     resonance: 0,
@@ -1777,6 +1898,8 @@
       runs: 0,
       sparks: 0,
       decrees: 0,
+      deepFlowTime: 0,
+      bestDeepFlowStreak: 0,
     },
     lastSave: 0,
   };
@@ -1887,6 +2010,9 @@
     const rows = [
       ["Best Core stage", (progress.bestCoreStage || "spark").toUpperCase()],
       ["Best Core charge", Math.round(progress.bestStarCore || 0) + "%"],
+      ["Deep Flow (life)", Math.round(s.deepFlowTime || 0) + "s"],
+      ["Best Deep streak", Math.round(s.bestDeepFlowStreak || 0) + "s"],
+      ["Deep Flow (run)", Math.round(state.deepFlowTime || 0) + "s"],
       ["Decrees found", (progress.decrees.length || 0) + " / " + totalDecreeCount()],
       ["Quests (lifetime)", (progress.completedQuests || []).length + " / " + QUEST_DEFS.length],
       [
@@ -2021,8 +2147,128 @@
     }
     return stage;
   }
-  const momentumBuf = new Array(20).fill(0);
-  let momentumIdx = 0;
+  // ---------------------------------------------------------------------------
+  // Official Momentum System (StarBoltSprint)
+  // Build via speed × consistency; WorldInfluence = pow(M, 1.65)
+  // ---------------------------------------------------------------------------
+  const MOMENTUM = {
+    REFERENCE_SPEED: 28, // u/s — clean sprint reference (SpeedFactor = 1.0)
+    BASE_BUILD_RATE: 0.032, // per second at SpeedFactor=1, Consistency=1
+    DECAY_RATE: 0.2, // when SpeedFactor < 0.55: Momentum *= (1 - 0.20 * dt)
+    DECAY_SPEED_THRESH: 0.55,
+    SOFT_CAP_START: 0.85,
+    RING_N: 48, // consistency samples (~0.8–1.5s depending on FPS)
+    // Thresholds → flow states
+    T_AWAKENING: 0.5,
+    T_FLOW: 0.75,
+    T_DEEP: 0.9,
+  };
+  const momentumRing = new Float32Array(MOMENTUM.RING_N);
+  let momentumRingIdx = 0;
+  let momentumRingFilled = 0;
+  let deepFlowStreak = 0; // continuous deep-flow seconds this run
+
+  function flowStateFromMomentum(m) {
+    if (m >= MOMENTUM.T_DEEP) return "deep";
+    if (m >= MOMENTUM.T_FLOW) return "flow";
+    if (m >= MOMENTUM.T_AWAKENING) return "awakening";
+    return "stillness";
+  }
+
+  /**
+   * Official Momentum step.
+   * SpeedFactor = clamp(speed / Ref, 0, 1.8)
+   * Consistency = avg of last N speeds / Ref, ConsistencyFactor = pow(Consistency, 1.4)
+   * BuildAmount = BaseBuildRate × SpeedFactor × ConsistencyFactor × dt
+   * Soft cap after 0.85; decay when SpeedFactor < 0.55
+   * WorldInfluence = pow(Momentum, 1.65)
+   */
+  function updateMomentumSystem(dt, speed) {
+    const ref = MOMENTUM.REFERENCE_SPEED;
+    const spd = Math.max(0, speed || 0);
+    const speedFactor = THREE.MathUtils.clamp(spd / ref, 0, 1.8);
+
+    // Ring buffer of raw speeds for consistency
+    momentumRing[momentumRingIdx] = spd;
+    momentumRingIdx = (momentumRingIdx + 1) % MOMENTUM.RING_N;
+    if (momentumRingFilled < MOMENTUM.RING_N) momentumRingFilled++;
+
+    let sum = 0;
+    for (let i = 0; i < momentumRingFilled; i++) sum += momentumRing[i];
+    const avgSpeed = momentumRingFilled > 0 ? sum / momentumRingFilled : 0;
+    // Consistency 0..1 relative to reference (clamp so pow stays stable)
+    const consistency = THREE.MathUtils.clamp(avgSpeed / ref, 0, 1.5);
+    const consistencyFactor = Math.pow(Math.max(0.001, consistency), 1.4);
+
+    state.speedFactor = speedFactor;
+    state.consistencyFactor = consistencyFactor;
+
+    let buildAmount =
+      MOMENTUM.BASE_BUILD_RATE * speedFactor * consistencyFactor * dt;
+
+    // Soft cap: after 0.85, build slows so 1.0 is earned
+    if (state.momentum > MOMENTUM.SOFT_CAP_START) {
+      const t = (state.momentum - MOMENTUM.SOFT_CAP_START) / (1 - MOMENTUM.SOFT_CAP_START);
+      buildAmount *= Math.max(0, 1 - t);
+    }
+
+    // Build only while meaningfully moving (walking still builds slowly via SpeedFactor)
+    state.momentum = Math.min(1, state.momentum + buildAmount);
+
+    // Decay when too slow
+    if (speedFactor < MOMENTUM.DECAY_SPEED_THRESH) {
+      state.momentum *= 1 - MOMENTUM.DECAY_RATE * dt;
+      if (state.momentum < 0.001) state.momentum = 0;
+    }
+
+    // World reaction curve — low M barely moves the world; high M explodes
+    state.worldInfluence = Math.pow(state.momentum, 1.65);
+
+    // Flow state + Deep Flow time (progression currency)
+    state.prevFlowState = state.flowState;
+    state.flowState = flowStateFromMomentum(state.momentum);
+    if (state.momentum >= MOMENTUM.T_DEEP) {
+      state.deepFlowTime += dt;
+      state.deepFlowTimeTotal += dt;
+      deepFlowStreak += dt;
+      progress.stats.deepFlowTime = (progress.stats.deepFlowTime || 0) + dt;
+      if (deepFlowStreak > (progress.stats.bestDeepFlowStreak || 0)) {
+        progress.stats.bestDeepFlowStreak = deepFlowStreak;
+      }
+    } else {
+      deepFlowStreak = 0;
+    }
+
+    // Sprint hold for uncapped speed growth (not tied to momentum ceiling)
+    const moving = spd > 2.5 && state.sprinting;
+    if (moving) state.sprintHoldTime += dt;
+    else state.sprintHoldTime = Math.max(0, state.sprintHoldTime - dt * 1.5);
+
+    // Ceremonial flow-state toasts (once per transition up)
+    if (state.flowState !== state.prevFlowState) {
+      const rank = { stillness: 0, awakening: 1, flow: 2, deep: 3 };
+      if (rank[state.flowState] > rank[state.prevFlowState]) {
+        if (state.flowState === "awakening") {
+          toast("AWAKENING — the world notices your line", 2400, "lore");
+        } else if (state.flowState === "flow") {
+          toast("FLOW — clear reactions begin", 2600, "lore");
+        } else if (state.flowState === "deep") {
+          toast("DEEP FLOW — Storm Peak · the Zone opens", 3200, "gate-open-toast");
+          punchCam(0.22, 5);
+        }
+      }
+    }
+
+    return state.momentum;
+  }
+
+  /** Optional external pulse (howl / loot) — small, never jumps past 1.0 */
+  function pulseMomentum(amount) {
+    state.momentum = Math.min(1, state.momentum + (amount || 0));
+    state.worldInfluence = Math.pow(state.momentum, 1.65);
+    state.flowState = flowStateFromMomentum(state.momentum);
+  }
+
   const tmpV = new THREE.Vector3();
   const tmpV2 = new THREE.Vector3();
   let gateBannerTimer = null;
@@ -2857,12 +3103,14 @@
 
   function toast(msg, ms, kind) {
     ms = ms || 2200;
+    if (!toastEl) return;
     toastEl.textContent = msg;
     toastEl.classList.remove("lore", "gate-open-toast", "gate-close-toast");
     if (kind) toastEl.classList.add(kind);
     toastEl.classList.add("show");
     clearTimeout(toast._t);
     toast._t = setTimeout(function () {
+      if (!toastEl) return;
       toastEl.classList.remove("show", "lore", "gate-open-toast", "gate-close-toast");
     }, ms);
   }
@@ -3152,7 +3400,7 @@
     if (state.howlT > 0) return;
     state.howlT = 0.9;
     state.resonance = Math.min(1, state.resonance + 0.35);
-    state.momentum = Math.min(1, state.momentum + 0.2);
+    pulseMomentum(0.12);
     const dir = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     state.vel.addScaledVector(dir, 12 + state.momentum * 10);
     state.vel.y += 4;
@@ -3528,11 +3776,11 @@
     if (doWorld) applyLookInput();
 
     let h2 = Math.hypot(state.vel.x, state.vel.z);
-
-    if (doPhysics) {
+    // Always available (world pass used these after physics split — was ReferenceError)
     const forward = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
     const right = new THREE.Vector3(Math.sin(yaw + Math.PI / 2), 0, Math.cos(yaw + Math.PI / 2));
 
+    if (doPhysics) {
     const wish = new THREE.Vector3();
     if (keys["KeyW"] || keys["ArrowUp"]) wish.add(forward);
     if (keys["KeyS"] || keys["ArrowDown"]) wish.sub(forward);
@@ -3540,15 +3788,15 @@
     if (keys["KeyA"] || keys["ArrowLeft"]) wish.sub(right);
     if (wish.lengthSq() > 0) wish.normalize();
 
-    state.sprinting = !!(keys["ShiftLeft"] || keys["ShiftRight"]);
+    state.sprinting = isSprintHeld();
     // Store wish for facing (so Bolt looks where you steer)
     state.wishX = wish.x;
     state.wishZ = wish.z;
 
-    // Slightly snappier accel so low-end catch-up still feels alive
-    const baseAcc = state.sprinting ? 42 : 20;
-    const momBonus = 1 + state.momentum * 1.4 + state.resonance * 0.5;
-    const acc = baseAcc * momBonus;
+    // Accel: slight flow feel from WorldInfluence (not a hard power gate)
+    const baseAcc = state.sprinting ? 52 : 22;
+    const flowBoost = 1 + (state.worldInfluence || 0) * 0.55 + state.resonance * 0.35;
+    const acc = baseAcc * flowBoost;
 
     if (wish.lengthSq() > 0) {
       state.vel.x += wish.x * acc * dt;
@@ -3556,10 +3804,10 @@
     }
 
     const horiz = Math.hypot(state.vel.x, state.vel.z);
-    // Lower sprint friction — old 2.2 ate speed when dt/FPS was uneven
+    // Low sprint friction so Shift+W actually ramps hard
     const friction = state.onGround
-      ? (state.sprinting ? 1.4 : 8.5)
-      : (state.sprinting ? 0.45 : 1.4);
+      ? (state.sprinting ? 0.85 : 8.5)
+      : (state.sprinting ? 0.32 : 1.4);
     if (horiz > 0.01) {
       const f = Math.max(0, 1 - friction * dt);
       state.vel.x *= f;
@@ -3569,12 +3817,28 @@
       state.vel.z = 0;
     }
 
-    const maxSpeed = (state.sprinting ? 30 : 12) * (1 + state.momentum * 0.85 + state.resonance * 0.4);
+    // Speed is NOT capped by Momentum (Momentum can sit at 1.0 while you keep accelerating).
+    // Soft ceiling only: walk hard-cap; sprint soft-grows with continuous hold time.
     h2 = Math.hypot(state.vel.x, state.vel.z);
-    if (h2 > maxSpeed) {
-      const s = maxSpeed / h2;
-      state.vel.x *= s;
-      state.vel.z *= s;
+    if (state.sprinting) {
+      const softMax =
+        38 +
+        Math.min(55, (state.sprintHoldTime || 0) * 1.15) +
+        state.resonance * 10;
+      // Gentle soft clamp past softMax (not a hard wall)
+      if (h2 > softMax) {
+        const over = h2 - softMax;
+        const pull = 1 - Math.min(0.35, over / (softMax + 40));
+        state.vel.x *= pull;
+        state.vel.z *= pull;
+      }
+    } else {
+      const walkMax = 12 * (1 + state.resonance * 0.15);
+      if (h2 > walkMax) {
+        const s = walkMax / h2;
+        state.vel.x *= s;
+        state.vel.z *= s;
+      }
     }
 
     if (keys["Space"] && state.onGround) {
@@ -3588,7 +3852,7 @@
         (breakAscent ? 6 + state.momentum * 5 : 0);
       state.vel.y = launch;
       state.onGround = false;
-      state.momentum = Math.min(1, state.momentum + 0.08);
+      pulseMomentum(0.06);
       if (breakAscent) {
         state.ascentCommit = true; // unlock orbital+ path — keep sprinting to climb
         toast("ASCENT COMMIT — keep Shift to climb scales · land anytime to stay surface", 3200, "lore");
@@ -3652,7 +3916,9 @@
       if (keys["Space"] && state.sprinting && Math.hypot(state.vel.x, state.vel.z) > 16) {
         state.vel.y += 10 * dt;
         state.vel.y = Math.min(state.vel.y, 14);
+        // Space climb burns a little Zone depth (not full decay formula)
         state.momentum = Math.max(0, state.momentum - dt * 0.08);
+        state.worldInfluence = Math.pow(state.momentum, 1.65);
       }
     }
 
@@ -3727,7 +3993,7 @@
           }
         }
         if (hit.assist) {
-          state.momentum = Math.min(1, state.momentum + 0.08);
+          pulseMomentum(0.06);
           punchCam(0.12, 3);
         }
         if (hit.shattered) {
@@ -3773,10 +4039,11 @@
         scene,
         { ambient: ambient, sun: sun, rim: rim, fill: lights.fill }
       );
+      // Keep biome sky readable (was *0.35 → almost black)
       if (scene.background && scene.background.isColor) {
-        scene.background.copy(biomeAtmo.sky).multiplyScalar(0.35);
+        scene.background.copy(biomeAtmo.sky).lerp(baseBgColor, 0.35).multiplyScalar(1.15);
       } else {
-        scene.background = biomeAtmo.sky.clone().multiplyScalar(0.35);
+        scene.background = biomeAtmo.sky.clone().lerp(baseBgColor, 0.35).multiplyScalar(1.15);
       }
 
       if (softParticles && softParticles.points && softParticles.points.visible) {
@@ -4181,7 +4448,7 @@
       if (d < 2.8 && Math.abs(player.position.y - b.y) < 2.5 && b.cool <= 0) {
         const dir = new THREE.Vector3(Math.sin(yaw), 0.35, Math.cos(yaw)).normalize();
         state.vel.addScaledVector(dir, 22 + state.momentum * 12);
-        state.momentum = Math.min(1, state.momentum + 0.25);
+        pulseMomentum(0.15);
         b.cool = 1.1;
         toast("BOLT DRIVE BOOST ⚡");
         if (Sfx && Sfx.playBoost) Sfx.playBoost();
@@ -4215,7 +4482,7 @@
       if (loot) {
         state.starCore = Math.min(100, state.starCore + loot.core);
         state.resonance = Math.min(1, state.resonance + loot.resonance);
-        state.momentum = Math.min(1, state.momentum + loot.power * 0.35);
+        pulseMomentum(loot.power * 0.25);
         state.ruinsLooted = (state.ruinsLooted || 0) + 1;
         progress.stats.ruins = (progress.stats.ruins || 0) + 1;
         if (Sfx && Sfx.playLoot) Sfx.playLoot();
@@ -4256,18 +4523,14 @@
 
     const speed = Math.hypot(state.vel.x, state.vel.z);
 
-    momentumBuf[momentumIdx] = speed;
-    momentumIdx = (momentumIdx + 1) % momentumBuf.length;
-    let avgMom = 0;
-    for (let i = 0; i < momentumBuf.length; i++) avgMom += momentumBuf[i];
-    avgMom /= momentumBuf.length;
-    const targetMom = THREE.MathUtils.clamp(avgMom / 30, 0, 1) * (state.sprinting ? 1 : 0.55);
-    state.momentum = damp(state.momentum, Math.max(state.momentum * 0.98, targetMom), 2.5, dt);
+    // Official Momentum system (build / decay / soft cap / WorldInfluence)
+    updateMomentumSystem(dt, speed);
 
     // Landmarks first (ruins / paths / citadel) for Intention destinations
     updateLandmarkMarkers(dt);
 
     // Intention: sprint toward landmarks OR citadel OR committed exploration
+    // (forward is always defined — was scoped only inside doPhysics and crashed world pass)
     const moveDir = speed > 0.5
       ? tmpV.set(state.vel.x, 0, state.vel.z).normalize()
       : forward;
@@ -4344,12 +4607,16 @@
     // Star Core stage (world multipliers + ceremony on rise)
     const coreStage = updateCoreStage();
 
-    // Seamless scale shift FIRST (feeds spawner + physics feel)
+    // Seamless scale shift — Deep Flow / WorldInfluence strengthens ascent
     const surfaceY = openWorld.heightAt(player.position.x, player.position.z);
     const scaleInfo = openWorld.updateScale(speed, player.position.y, camera, scene, {
       momentum: state.momentum,
+      worldInfluence: state.worldInfluence,
       sprinting: state.sprinting,
-      coreBoost: (state.coreStageIndex || 0) / 4 + state.starCore / 200,
+      coreBoost:
+        (state.coreStageIndex || 0) / 4 +
+        state.starCore / 200 +
+        (state.worldInfluence || 0) * 0.35,
       dt: dt,
       surfaceY: surfaceY,
       onGround: state.onGround,
@@ -4382,10 +4649,11 @@
     // Visual orbital cues: blacker sky, brighter stars, larger sky dome
     updateOrbitalAtmosphere(scaleInfo);
 
-    // Procedural Spawning — Gate + Core + SCALE-aware generators
+    // Procedural Spawning — driven by WorldInfluence (pow Momentum^1.65)
     state.meaningfulScore = spawner.update(dt, {
       speed: speed,
       momentum: state.momentum,
+      worldInfluence: state.worldInfluence,
       intention: state.intention,
       velocity: state.vel,
       sprinting: state.sprinting,
@@ -4421,42 +4689,48 @@
     if (Sfx && Sfx.update) {
       Sfx.update({
         speed: speed,
-        meaningful: state.meaningfulScore,
+        meaningful: Math.max(state.meaningfulScore || 0, state.worldInfluence || 0),
+        momentum: state.momentum,
+        worldInfluence: state.worldInfluence,
         sprinting: state.sprinting,
         gateOpen: state.gateOpen,
         coreStageIndex: state.coreStageIndex || 0,
         scaleStage: state.scaleStage,
         transitionProgress: state.transitionProgress || 0,
+        flowState: state.flowState,
       });
     }
 
-    // Lightning Core trail (ribbon + particles + arcs + echoes)
+    // Lightning Core trail — intensity follows Momentum / WorldInfluence
     const trailStage = coreStageFromCharge(state.starCore);
     const stageTrail = trailStage.boltGlow || 1;
     if (lightningTrail) {
       lightningTrail.update(dt, player.position, {
-        meaningful: state.meaningfulScore,
+        meaningful: Math.max(state.meaningfulScore || 0, state.worldInfluence || 0),
         momentum: state.momentum,
+        worldInfluence: state.worldInfluence,
         resonance: state.resonance,
         speed: speed,
         sprinting: state.sprinting,
         scaleStage: state.scaleStage,
-        coreGlow: stageTrail,
-        gateOpen: state.gateOpen,
+        coreGlow: stageTrail * (1 + (state.worldInfluence || 0) * 0.65),
+        gateOpen: state.gateOpen || state.momentum >= MOMENTUM.T_DEEP,
       });
     }
 
     // Dual ring aura — cyan + purple, scales with Meaningful Sprint + resonance
     const aPower = THREE.MathUtils.clamp(
-      (state.meaningfulScore || 0) * 0.55 +
-        (state.momentum || 0) * 0.25 +
-        (state.sprinting ? 0.2 : 0) +
-        state.resonance * 0.35 +
+      (state.worldInfluence || 0) * 0.55 +
+        (state.meaningfulScore || 0) * 0.2 +
+        (state.momentum || 0) * 0.15 +
+        (state.sprinting ? 0.15 : 0) +
+        state.resonance * 0.25 +
         (state.howlT > 0 ? 0.3 : 0) +
         stageTrail * 0.08 +
-        (state.packEventT > 0 ? 0.15 : 0),
+        (state.packEventT > 0 ? 0.15 : 0) +
+        (state.momentum >= MOMENTUM.T_DEEP ? 0.2 : 0),
       0,
-      1.2
+      1.35
     );
     const aOp = aPower * 0.55;
     aura.material.opacity = aOp;
@@ -4575,27 +4849,44 @@
     } else if (starField && starField.position) {
       starField.position.copy(camera.position);
     }
-    // Mild FOV kick only — large speed*0.45 + momentum*8 felt like camera “flying”
+    // Camera drama scales with WorldInfluence (Zone depth), not raw speed alone
+    const wi = state.worldInfluence || 0;
     const targetFov =
       juice.baseFov +
-      Math.min(6, speed * 0.18) +
-      state.momentum * 3.5 +
+      Math.min(6, speed * 0.15) +
+      wi * 7.5 +
+      (state.momentum >= MOMENTUM.T_DEEP ? 2.5 : 0) +
       juice.fovPunch +
       (state.packEventT > 0 ? 1.5 : 0);
     camera.fov = damp(camera.fov, targetFov, 6, dt);
     camera.updateProjectionMatrix();
 
-    // Minimal flow UI — Momentum bar only (Lightning Core aesthetic)
+    // Momentum bar — official 0..1 fill + flow-state chrome
     const m = THREE.MathUtils.clamp(state.momentum, 0, 1);
     if (ui.barMomentum) {
-      ui.barMomentum.style.width = m * 100 + "%";
+      const pct = m <= 0.01 ? 0 : m * 100;
+      ui.barMomentum.style.width = pct + "%";
     }
+    const flowNow = state.flowState || flowStateFromMomentum(m);
     if (hud) {
-      let flowState = "stillness";
-      if (m >= 0.9) flowState = "deep";
-      else if (m >= 0.75) flowState = "flow";
-      else if (m >= 0.5) flowState = "awakening";
-      hud.setAttribute("data-flow", flowState);
+      hud.setAttribute("data-flow", flowNow);
+      hud.setAttribute("data-momentum", m.toFixed(2));
+      hud.setAttribute(
+        "data-world-influence",
+        (state.worldInfluence || 0).toFixed(2)
+      );
+    }
+    const hintEl = document.getElementById("momentum-hint");
+    if (hintEl) {
+      const labels = {
+        stillness: "Stillness",
+        awakening: "Awakening",
+        flow: "Flow",
+        deep: "Deep Flow",
+      };
+      let label = labels[flowNow] || "Stillness";
+      if (flowNow === "deep" && deepFlowStreak > 8) label = "Storm Peak";
+      hintEl.textContent = label;
     }
     // Silent no-ops for removed telemetry (keep refs valid)
     if (ui.barSprint) ui.barSprint.style.width = "0%";
@@ -4615,106 +4906,7 @@
       updatePlanetNavHud();
     } catch (e) {}
 
-    // Dedicated Scale Indicator (Surface → Planetary → Orbital…)
-    if (ui.scaleBadge && ui.scaleBadgeName) {
-      const st = state.scaleStage || "paw";
-      const names = {
-        paw: "PAW",
-        planetary: "PLANETARY",
-        orbital: "ORBITAL",
-        solar: "SOLAR",
-        cosmic: "COSMIC",
-      };
-      const metas = {
-        paw: "surface · dense",
-        planetary: "wide world · rich",
-        orbital: "sky monuments · sparse",
-        solar: "planets as beacons",
-        cosmic: "Boltverse zoom",
-      };
-      ui.scaleBadgeName.textContent = names[st] || st.toUpperCase();
-      if (ui.scaleBadgeMeta) {
-        const alt = Math.max(0, player.position.y - openWorld.heightAt(player.position.x, player.position.z));
-        let meta =
-        (metas[st] || st) +
-        " · alt " + Math.round(alt) +
-        " · " + Math.round((state.transitionProgress || 0) * 100) + "%";
-      if (state.currentPlanet) {
-        meta =
-          (state.currentPlanet.short || state.currentPlanet.name) +
-          " · surface";
-      }
-      ui.scaleBadgeMeta.textContent = meta;
-      }
-      ui.scaleBadge.className =
-        "scale-badge scale-" + st + (ui.scaleBadge.classList.contains("flash") ? " flash" : "");
-    }
-
-    if (spawnStatsEl) {
-      const f = spawner.factors;
-      const dist = Math.hypot(player.position.x, player.position.z);
-      const bioName = (biomeAtmo && biomeAtmo.displayName) || f.biome || "BIOME";
-      const pt = f.paths || {};
-      const tt = f.terrain || {};
-      const vt = f.vegetation || {};
-      const rt = f.ruins || {};
-      const pathSum = (pt.energy || 0) + (pt.branch || 0) + (pt.shortcut || 0) + (pt.hidden || 0);
-      const terrSum =
-        (tt.boulders || 0) + (tt.ridge || 0) + (tt.crater || 0) + (tt.cliff || 0) +
-        (tt.floater || 0) + (tt.landmark || 0) + (tt.canyon || 0);
-      const landmarkN = (tt.landmark || 0) + (tt.canyon || 0);
-      const vegSum =
-        (vt.stalk || 0) + (vt.flower || 0) + (vt.bush || 0) + (vt.vine || 0) +
-        (vt.cluster || 0) + (vt.floater || 0) + (vt.canopy || 0) +
-        (vt.tree || 0) + (vt.megaTree || 0) + (vt.spire || 0) +
-        (vt.forest || 0);
-      const forestN = vt.forest || 0;
-      const ruinSum =
-        (rt.monolith || 0) + (rt.outpost || 0) + (rt.tower || 0) + (rt.arch || 0) +
-        (rt.platform || 0) + (rt.temple || 0) + (rt.wreck || 0);
-      const dt = f.details || {};
-      const detSum =
-        (dt.crystals || 0) + (dt.vent || 0) + (dt.shaft || 0) + (dt.motes || 0) +
-        (dt.debris || 0) + (dt.scorch || 0) + (dt.residue || 0) + (dt.footprints || 0);
-      const orbitTag = (state.scaleStage === "orbital" || state.scaleStage === "solar" || state.scaleStage === "cosmic")
-        ? " · 🌌 ORBIT"
-        : "";
-      let debrisTag = "";
-      if (orbitalDebris && orbitalDebris.count > 0) {
-        const ds = orbitalDebris.getStats();
-        debrisTag =
-          " · debris " +
-          ds.active +
-          (ds.broken ? " 💥" + ds.broken : "") +
-          (ds.assists ? " ⚡" + ds.assists : "");
-      }
-      const bandTag = f.sceneBand
-        ? " · " + String(f.sceneBand).toUpperCase()
-        : "";
-      const forestTag = forestN > 0 ? " · forests " + forestN : "";
-      const landTag = landmarkN > 0 ? " · landmarks " + landmarkN : "";
-      const sceneTag = f.scenes > 0 ? " · scenes " + f.scenes : "";
-      spawnStatsEl.textContent =
-        "◈ " + bioName +
-        " · " + (state.scaleStage || "paw").toUpperCase() +
-        " " + Math.round((state.transitionProgress || 0) * 100) + "%" +
-        orbitTag +
-        debrisTag +
-        " · " + Math.round(dist) + "m" +
-        " · paths " + pathSum +
-        " · terrain " + terrSum +
-        landTag +
-        " · flora " + vegSum +
-        forestTag +
-        sceneTag +
-        " · ruins " + ruinSum +
-        " · detail " + detSum +
-        " · dens " + Math.round(f.density * 100) + "%" +
-        bandTag +
-        " · core " + (state.coreStageId || "spark").toUpperCase() +
-        (f.coreWorldMul > 0.01 ? " +" + Math.round(f.coreWorldMul * 100) + "%w" : "") +
-        (f.flux > 0.05 ? " · FLUX" : "");
-    }
+    // HUD is momentum-only — scale badge / spawn telemetry stay CSS-hidden
   }
 
   /**
@@ -4839,16 +5031,17 @@
     // Flat ground fade is handled by openworld groundOp (→0 in orbit).
     // Home planet sphere is the curved world you left behind.
 
-    // Balanced lights by scale (surface readable; orbit dark but not muddy)
+    // Surface: bright readable fill; orbit: moodier but still visible
+    const surfaceHemi = GraphicsQuality.hemi != null ? GraphicsQuality.hemi : 0.95;
     if (lights && lights.hemi) {
       lights.hemi.intensity = THREE.MathUtils.lerp(
         lights.hemi.intensity,
-        orbital ? 0.3 : 0.48,
+        orbital ? 0.42 : surfaceHemi,
         0.05
       );
     }
     if (sun) {
-      sun.intensity = THREE.MathUtils.lerp(sun.intensity, orbital ? 1.05 : 1.15, 0.05);
+      sun.intensity = THREE.MathUtils.lerp(sun.intensity, orbital ? 1.15 : 1.65, 0.05);
       // Key follows player for planet terminator + distant worlds
       if ((orbital || planetVis > 0.25) && player) {
         sun.position.set(
@@ -4858,42 +5051,51 @@
         );
       }
     }
-    // Keep exposure restrained so hero + white materials stay readable
+    if (lights && lights.fill) {
+      lights.fill.intensity = THREE.MathUtils.lerp(
+        lights.fill.intensity,
+        orbital ? 0.22 : 0.48,
+        0.05
+      );
+    }
+    // Surface exposure from gfx tier (was hard-capped ~1.02 → muddy black)
+    const surfaceExposure =
+      GraphicsQuality.exposure != null ? GraphicsQuality.exposure : 1.22;
     if (orbital) {
       renderer.toneMappingExposure = THREE.MathUtils.lerp(
         renderer.toneMappingExposure,
-        1.05,
+        1.12,
         0.04
       );
     } else {
       renderer.toneMappingExposure = THREE.MathUtils.lerp(
         renderer.toneMappingExposure,
-        1.02,
+        surfaceExposure,
         0.04
       );
     }
-    // Cinematic grade by scale (vignette + sat; bloom stays selective)
+    // Lighter vignette on surface so the world stays readable
     if (bloom && bloom.setGrade) {
       if (orbital) {
         bloom.setGrade({
-          vignette: 0.32,
+          vignette: 0.28,
           saturation: 1.05,
-          contrast: 1.08,
+          contrast: 1.06,
           bloomStrength: 0.58,
         });
       } else if (st === "planetary") {
         bloom.setGrade({
-          vignette: 0.36,
-          saturation: 1.1,
-          contrast: 1.06,
-          bloomStrength: 0.5,
+          vignette: 0.18,
+          saturation: 1.12,
+          contrast: 1.04,
+          bloomStrength: 0.48,
         });
       } else {
         bloom.setGrade({
-          vignette: 0.4,
-          saturation: 1.08,
-          contrast: 1.05,
-          bloomStrength: 0.48,
+          vignette: 0.14,
+          saturation: 1.1,
+          contrast: 1.03,
+          bloomStrength: 0.45,
         });
       }
     }
@@ -4933,6 +5135,43 @@
     resetThirdPersonCam();
     // Align camera behind spawn facing
     if (boltMesh) yaw = boltMesh.rotation.y;
+    // Fresh Momentum run
+    state.momentum = 0;
+    state.worldInfluence = 0;
+    state.deepFlowTime = 0;
+    state.flowState = "stillness";
+    state.prevFlowState = "stillness";
+    state.sprintHoldTime = 0;
+    state.speedFactor = 0;
+    state.consistencyFactor = 0;
+    deepFlowStreak = 0;
+    momentumRingIdx = 0;
+    momentumRingFilled = 0;
+    for (let i = 0; i < MOMENTUM.RING_N; i++) momentumRing[i] = 0;
+    // Showcase: lock world to Jade Canopy only (living forest biome)
+    if (window.BoltProcedural && window.BoltProcedural.setForceBiome) {
+      window.BoltProcedural.setForceBiome("jadeCanopy");
+    }
+    // Re-apply gfx tier with full stream radius (VIEW/maxChunks) then rebuild terrain
+    try {
+      applyGraphicsQuality({ rebuild: true });
+    } catch (eQ) {
+      console.warn("gfx rebuild", eQ);
+    }
+    if (openWorld && openWorld.rebuildAll && player) {
+      try {
+        openWorld.rebuildAll(player.position.x, player.position.z);
+      } catch (eRebuild) {
+        console.warn("jade rebuild", eRebuild);
+      }
+    }
+    // Ensure keyboard targets the game (button click can leave focus elsewhere)
+    try {
+      if (canvas) {
+        if (!canvas.hasAttribute("tabindex")) canvas.setAttribute("tabindex", "0");
+        canvas.focus({ preventScroll: true });
+      }
+    } catch (eFocus) { /* ignore */ }
     tryPointerLock();
     // Retry lock once — some browsers need a second gesture frame
     setTimeout(tryPointerLock, 120);
@@ -4949,13 +5188,16 @@
     // Unlock Web Audio on user gesture
     if (Sfx && Sfx.start) {
       Sfx.start().then(function () {
-        toast("STARBOLTSPRINT — WHITE SHEPHERD ONLINE ⚡🐺", 2800);
+        toast("JADE CANOPY — living forest online 🌿⚡", 3000);
       }).catch(function () {
-        toast("STARBOLTSPRINT — WHITE SHEPHERD ONLINE ⚡🐺", 2800);
+        toast("JADE CANOPY — living forest online 🌿⚡", 3000);
       });
     } else {
-      toast("STARBOLTSPRINT — WHITE SHEPHERD ONLINE ⚡🐺", 2800);
+      toast("JADE CANOPY — living forest online 🌿⚡", 3000);
     }
+    setTimeout(function () {
+      toast("Sprint hard — whole forests grow ahead of you", 3600, "lore");
+    }, 2800);
     if (progress.bestCoreIndex > 0) {
       setTimeout(function () {
         toast(
@@ -5036,6 +5278,7 @@
     const t = clock.elapsedTime;
 
     if (started && !paused) {
+      // Physics isolated from world/HUD — a render-side error must never freeze sprint
       try {
         simAccumulator += rawDt;
         let steps = 0;
@@ -5052,12 +5295,16 @@
         if (steps === 0) {
           updatePlayer(Math.min(rawDt, PHYS_DT), { physics: true, world: false });
         }
+      } catch (errPhys) {
+        console.error("updatePlayer physics", errPhys);
+      }
 
+      try {
         // World systems once per frame (no second physics pass)
         const worldDt = Math.min(Math.max(rawDt, PHYS_DT), 0.05);
         updatePlayer(worldDt, { physics: false, world: true });
       } catch (errFrame) {
-        console.error("updatePlayer", errFrame);
+        console.error("updatePlayer world", errFrame);
         // Emergency camera: stay on Bolt so the game remains playable
         if (player && camera) {
           camera.position.set(

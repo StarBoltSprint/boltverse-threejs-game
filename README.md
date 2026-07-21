@@ -16,6 +16,11 @@ Latest on `main`: fixed-timestep sprint physics (no freeze/crawl on low-end PCs)
 
 Double-click **`index.html`** (or open via a local server). Use **Ctrl+F5** after pulls.
 
+### Crystal Nebula lore showcase (cinematic)
+
+Open **`showcase-crystal-nebula.html`** for a short neon / Tron-energy vertical strip themed on **StarBoltSprint** lore (Bolt on the energy path, Crystal Nebula props, Meaningful Sprint).  
+Inspired by cinematic Three.js demos — offline, no API.
+
 ## What’s in v2.5
 
 ### Performance & movement (smooth Low / Med)

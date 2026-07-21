@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STARBOLTSPRINT — Crystal Nebula · Lore Showcase</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Rajdhani:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --cyan: #3ef0ff;
+      --magenta: #c44dff;
+      --deep: #05010f;
+      --glass: rgba(12, 8, 28, 0.55);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: var(--deep);
+      font-family: "Rajdhani", system-ui, sans-serif;
+      color: #e8e0ff;
+    }
+    #c {
+      position: fixed; inset: 0; width: 100%; height: 100%;
+      display: block; outline: none;
+    }
+    /* Cinematic vignette */
+    .vignette {
+      pointer-events: none;
+      position: fixed; inset: 0; z-index: 2;
+      background:
+        radial-gradient(ellipse 75% 70% at 50% 45%, transparent 40%, rgba(5,1,15,0.55) 100%),
+        linear-gradient(180deg, rgba(5,1,15,0.35) 0%, transparent 18%, transparent 78%, rgba(5,1,15,0.65) 100%);
+    }
+    .scan {
+      pointer-events: none;
+      position: fixed; inset: 0; z-index: 3; opacity: 0.07;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.35) 2px,
+        rgba(0,0,0,0.35) 4px
+      );
+    }
+    /* Title card overlay */
+    #lore {
+      position: fixed; inset: 0; z-index: 10;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center;
+      background: radial-gradient(ellipse at 50% 40%, rgba(60,20,90,0.45), rgba(5,1,15,0.92));
+      transition: opacity 1.2s ease, visibility 1.2s;
+    }
+    #lore.hide {
+      opacity: 0; visibility: hidden; pointer-events: none;
+    }
+    #lore .chip {
+      font-family: Orbitron, sans-serif;
+      font-size: 0.7rem; letter-spacing: 0.35em;
+      color: var(--cyan); opacity: 0.9;
+      border: 1px solid rgba(62,240,255,0.35);
+      padding: 0.35rem 0.85rem; border-radius: 999px;
+      margin-bottom: 1.25rem;
+      text-shadow: 0 0 12px rgba(62,240,255,0.5);
+    }
+    #lore h1 {
+      font-family: Orbitron, sans-serif;
+      font-weight: 800; font-size: clamp(1.6rem, 5vw, 3rem);
+      letter-spacing: 0.12em;
+      background: linear-gradient(120deg, #fff 10%, var(--cyan) 45%, var(--magenta) 90%);
+      -webkit-background-clip: text; background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 0 24px rgba(196,77,255,0.35));
+    }
+    #lore .tag {
+      margin-top: 0.75rem;
+      font-size: clamp(1rem, 2.5vw, 1.35rem);
+      letter-spacing: 0.2em; text-transform: uppercase;
+      color: rgba(200, 180, 255, 0.85);
+    }
+    #lore .line {
+      margin-top: 1.5rem; max-width: 28rem;
+      font-size: 1.05rem; line-height: 1.55;
+      color: rgba(220, 210, 255, 0.75);
+      padding: 0 1.5rem;
+    }
+    #lore .cta {
+      margin-top: 2rem;
+      font-family: Orbitron, sans-serif;
+      font-size: 0.75rem; letter-spacing: 0.28em;
+      color: #05010f; background: linear-gradient(90deg, var(--cyan), #7af);
+      border: none; padding: 0.9rem 1.8rem; border-radius: 4px;
+      cursor: pointer;
+      box-shadow: 0 0 28px rgba(62,240,255,0.45);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    #lore .cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 40px rgba(62,240,255,0.65);
+    }
+    #lore .sub {
+      margin-top: 1rem; font-size: 0.85rem;
+      color: rgba(180,160,220,0.55); letter-spacing: 0.08em;
+    }
+    /* HUD */
+    #hud {
+      position: fixed; z-index: 5; inset: 0; pointer-events: none;
+      opacity: 0; transition: opacity 0.8s ease;
+    }
+    #hud.show { opacity: 1; }
+    .hud-top {
+      position: absolute; top: 1.1rem; left: 1.25rem; right: 1.25rem;
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 1rem;
+    }
+    .brand {
+      font-family: Orbitron, sans-serif;
+      font-size: 0.72rem; letter-spacing: 0.28em;
+      color: var(--cyan);
+      text-shadow: 0 0 14px rgba(62,240,255,0.55);
+    }
+    .brand em { font-style: normal; color: var(--magenta); }
+    .lore-ticker {
+      max-width: min(28rem, 52vw);
+      text-align: right;
+      font-size: 0.92rem;
+      letter-spacing: 0.04em;
+      color: rgba(230, 220, 255, 0.82);
+      text-shadow: 0 0 10px rgba(100,40,160,0.5);
+      min-height: 2.6em;
+    }
+    .hud-bottom {
+      position: absolute; bottom: 1.2rem; left: 1.25rem; right: 1.25rem;
+      display: flex; justify-content: space-between; align-items: flex-end;
+      gap: 1rem; flex-wrap: wrap;
+    }
+    .meter {
+      background: var(--glass);
+      border: 1px solid rgba(62,240,255,0.2);
+      backdrop-filter: blur(8px);
+      padding: 0.55rem 0.85rem;
+      border-radius: 6px;
+      min-width: 11rem;
+    }
+    .meter label {
+      display: block;
+      font-family: Orbitron, sans-serif;
+      font-size: 0.58rem; letter-spacing: 0.22em;
+      color: rgba(62,240,255,0.75); margin-bottom: 0.3rem;
+    }
+    .bar {
+      height: 5px; background: rgba(255,255,255,0.08);
+      border-radius: 3px; overflow: hidden;
+    }
+    .bar i {
+      display: block; height: 100%; width: 0%;
+      background: linear-gradient(90deg, var(--magenta), var(--cyan));
+      box-shadow: 0 0 10px var(--cyan);
+      transition: width 0.08s linear;
+    }
+    .keys {
+      font-size: 0.8rem; color: rgba(200,190,255,0.55);
+      letter-spacing: 0.06em;
+    }
+    .keys kbd {
+      font-family: Orbitron, sans-serif;
+      font-size: 0.65rem;
+      border: 1px solid rgba(62,240,255,0.3);
+      padding: 0.12rem 0.35rem; border-radius: 3px;
+      color: var(--cyan); margin: 0 0.15rem;
+    }
+    .corner {
+      position: absolute; width: 28px; height: 28px;
+      border-color: rgba(62,240,255,0.45); border-style: solid;
+      opacity: 0.7;
+    }
+    .corner.tl { top: 14px; left: 14px; border-width: 2px 0 0 2px; }
+    .corner.tr { top: 14px; right: 14px; border-width: 2px 2px 0 0; }
+    .corner.bl { bottom: 14px; left: 14px; border-width: 0 0 2px 2px; }
+    .corner.br { bottom: 14px; right: 14px; border-width: 0 2px 2px 0; }
+    a.back {
+      pointer-events: auto;
+      position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
+      z-index: 12;
+      font-family: Orbitron, sans-serif;
+      font-size: 0.58rem; letter-spacing: 0.2em;
+      color: rgba(200,190,255,0.5);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+    }
+    a.back:hover { color: var(--cyan); border-color: rgba(62,240,255,0.4); }
+    #lore a.back { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+  <div class="scan" aria-hidden="true"></div>
+
+  <div id="lore">
+    <span class="chip">SPIRAL-47 · PROTOCOL</span>
+    <h1>STARBOLTSPRINT</h1>
+    <p class="tag">Sprint shapes the world</p>
+    <p class="line">
+      In the Crystal Nebula Plains, motion is not escape — it is creation.
+      Bolt, the lightning wolf, runs the energy highway. Where he sprints with purpose,
+      the cosmos answers: denser crystal, brighter path, deeper sky.
+    </p>
+    <button type="button" class="cta" id="enter-btn">ENTER THE NEBULA</button>
+    <p class="sub">WASD move · SHIFT sprint · mouse look · F fullscreen · ESC title</p>
+  </div>
+
+  <div id="hud">
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+    <div class="hud-top">
+      <div class="brand">BOLT <em>×</em> STARBOLTSPRINT</div>
+      <div class="lore-ticker" id="ticker">The path remembers every stride…</div>
+    </div>
+    <div class="hud-bottom">
+      <div class="meter">
+        <label>MEANINGFUL SPRINT</label>
+        <div class="bar"><i id="bar-sprint"></i></div>
+      </div>
+      <div class="keys">
+        <kbd>WASD</kbd> path · <kbd>SHIFT</kbd> charge · <kbd>F</kbd> fullscreen
+      </div>
+    </div>
+  </div>
+
+  <a class="back" id="back-link" href="index.html">← FULL BOLT ENGINE</a>
+
+  <script src="js/three.min.js"></script>
+  <script src="js/showcase-crystal.js"></script>
+</body>
+</html>

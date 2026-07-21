@@ -40,50 +40,51 @@
   function makeGroundTexture(biomeId) {
     return canvasTex((ctx, s) => {
       let base, vein, speck, crack, glow;
-      // Midtones lifted so grit/veins read under night lighting (not pure navy void)
+      // Brighter midtones so terrain reads under ACES (was near-void navy)
       if (biomeId === "emberVoid") {
-        base = ["#1a0c08", "#2a1410", "#3d1c12", "#5a2a18"];
-        vein = "rgba(249,115,22,0.48)";
-        speck = [220, 110, 55];
-        crack = "rgba(90,35,12,0.6)";
-        glow = "rgba(251,146,60,0.28)";
+        base = ["#3a2014", "#5a3020", "#7a4428", "#9a5830"];
+        vein = "rgba(249,115,22,0.52)";
+        speck = [230, 130, 70];
+        crack = "rgba(100,45,18,0.55)";
+        glow = "rgba(251,146,60,0.32)";
       } else if (biomeId === "whisperStars") {
-        base = ["#0a0a18", "#12122a", "#1c1c3a", "#2a2a52"];
-        vein = "rgba(165,180,252,0.4)";
-        speck = [185, 195, 255];
-        crack = "rgba(40,40,80,0.55)";
-        glow = "rgba(129,140,248,0.24)";
+        base = ["#1a1a38", "#2a2a52", "#3a3a6a", "#505088"];
+        vein = "rgba(165,180,252,0.48)";
+        speck = [200, 210, 255];
+        crack = "rgba(50,50,100,0.5)";
+        glow = "rgba(129,140,248,0.3)";
       } else if (biomeId === "solarGold") {
-        base = ["#1a1408", "#2a1e0c", "#3d2a12", "#5a3c18"];
-        vein = "rgba(251,191,36,0.45)";
-        speck = [240, 200, 80];
-        crack = "rgba(70,45,12,0.55)";
-        glow = "rgba(252,211,77,0.26)";
+        base = ["#3a2a14", "#5a4020", "#7a5828", "#9a7030"];
+        vein = "rgba(251,191,36,0.5)";
+        speck = [245, 210, 100];
+        crack = "rgba(90,55,18,0.5)";
+        glow = "rgba(252,211,77,0.3)";
       } else if (biomeId === "frostGlacier") {
-        base = ["#0a1624", "#122840", "#1a3a58", "#2a5580"];
-        vein = "rgba(125,211,252,0.42)";
-        speck = [200, 235, 255];
-        crack = "rgba(25,50,85,0.6)";
-        glow = "rgba(186,230,253,0.28)";
+        base = ["#1a3858", "#2a5080", "#3a6aa0", "#5088c0"];
+        vein = "rgba(125,211,252,0.5)";
+        speck = [210, 240, 255];
+        crack = "rgba(35,70,110,0.5)";
+        glow = "rgba(186,230,253,0.32)";
       } else if (biomeId === "jadeCanopy") {
-        base = ["#061a10", "#0c2e1c", "#14402a", "#1e5a3a"];
-        vein = "rgba(52,211,153,0.42)";
-        speck = [100, 235, 180];
-        crack = "rgba(12,50,30,0.55)";
-        glow = "rgba(110,231,183,0.24)";
+        // Lush forest floor — moss, loam, soft biolum veins
+        base = ["#1a4a30", "#246848", "#2f8a5c", "#3da870"];
+        vein = "rgba(74,222,128,0.55)";
+        speck = [134, 239, 172];
+        crack = "rgba(30,90,55,0.45)";
+        glow = "rgba(110,231,183,0.38)";
       } else if (biomeId === "rosePulse") {
-        base = ["#180810", "#28141c", "#3a1c2c", "#552840"];
-        vein = "rgba(244,114,182,0.42)";
-        speck = [255, 140, 200];
-        crack = "rgba(60,20,40,0.55)";
-        glow = "rgba(249,168,212,0.26)";
+        base = ["#381828", "#502838", "#6a3850", "#885068"];
+        vein = "rgba(244,114,182,0.5)";
+        speck = [255, 160, 210];
+        crack = "rgba(80,30,55,0.5)";
+        glow = "rgba(249,168,212,0.3)";
       } else {
-        // crystalNebula — teal slate dirt, not flat navy
-        base = ["#0a1c2e", "#123048", "#1a4260", "#285878"];
-        vein = "rgba(34,211,238,0.45)";
-        speck = [120, 235, 250];
-        crack = "rgba(18,50,75,0.55)";
-        glow = "rgba(103,232,249,0.26)";
+        // crystalNebula — teal slate dirt, readable at night
+        base = ["#1a3a58", "#2a5078", "#3a6a98", "#4a88b8"];
+        vein = "rgba(34,211,238,0.5)";
+        speck = [140, 240, 255];
+        crack = "rgba(30,70,100,0.5)";
+        glow = "rgba(103,232,249,0.3)";
       }
 
       // Base multi-stop fill
@@ -493,7 +494,7 @@
       whisperStars: { zenith: 0x05041a, horizon: 0x3b1f8a, accent: 0xc4b5fd, band: 0xf5e1ff },
       solarGold: { zenith: 0x120a02, horizon: 0x9a5c10, accent: 0xfbbf24, band: 0xfff1b8 },
       frostGlacier: { zenith: 0x020a16, horizon: 0x0a5a8a, accent: 0x38bdf8, band: 0xe0f2fe },
-      jadeCanopy: { zenith: 0x020e08, horizon: 0x0c5a38, accent: 0x34d399, band: 0x86efac },
+      jadeCanopy: { zenith: 0x061a10, horizon: 0x1a6a40, accent: 0x4ade80, band: 0xfef08a },
       rosePulse: { zenith: 0x10040c, horizon: 0x6a1848, accent: 0xf472b6, band: 0xfbcfe8 },
     };
     const _skyZ = new THREE.Color();
@@ -2359,13 +2360,13 @@
   // Balanced lighting: clear key, soft fill, subtle cyan rim
   // ---------------------------------------------------------------------------
   function createLighting(scene) {
-    // Cool sky / dark ground — readable silhouettes + soft AO feel
-    const ambient = new THREE.HemisphereLight(0xd8e4ff, 0x12101c, 0.55);
+    // Brighter sky fill + lifted ground bounce so terrain isn't a black hole
+    const ambient = new THREE.HemisphereLight(0xe8f0ff, 0x3a4a68, 0.95);
     ambient.name = "HemiLight";
     scene.add(ambient);
 
-    // Strong key (sun) — defines form on white fur
-    const sun = new THREE.DirectionalLight(0xfff6ec, 1.28);
+    // Strong key (sun) — defines form on white fur + lights the ground
+    const sun = new THREE.DirectionalLight(0xfff8f0, 1.65);
     sun.position.set(55, 110, 35);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -2382,19 +2383,19 @@
     scene.add(sun);
 
     // Soft cool fill from opposite side
-    const fill = new THREE.DirectionalLight(0xa8bfff, 0.32);
+    const fill = new THREE.DirectionalLight(0xb8c8ff, 0.48);
     fill.position.set(-50, 40, -30);
     fill.name = "FillLight";
     scene.add(fill);
 
-    // Subtle cyan rim — energy feel
-    const rim = new THREE.PointLight(0x5eead4, 0.55, 200);
+    // Cyan rim — energy feel
+    const rim = new THREE.PointLight(0x5eead4, 0.7, 220);
     rim.position.set(0, 28, 0);
     rim.name = "RimLight";
     scene.add(rim);
 
     // Back rim for separation from sky
-    const back = new THREE.DirectionalLight(0xb4c0ff, 0.22);
+    const back = new THREE.DirectionalLight(0xc0ccff, 0.32);
     back.position.set(0, 25, -90);
     back.name = "BackRim";
     scene.add(back);
@@ -2416,9 +2417,9 @@
   function createHorizonHaze(scene) {
     const geo = new THREE.SphereGeometry(400, 48, 24, 0, Math.PI * 2, 0, Math.PI * 0.42);
     const mat = new THREE.MeshBasicMaterial({
-      color: 0x3d6a9a,
+      color: 0x4ade80, // jade canopy horizon (not raw navy blue)
       transparent: true,
-      opacity: 0.14,
+      opacity: 0.18,
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
@@ -2427,6 +2428,8 @@
     const haze = new THREE.Mesh(geo, mat);
     haze.name = "HorizonHaze";
     haze.renderOrder = -90;
+    // Larger dome so far hills don't silhouette against empty void
+    haze.scale.setScalar(2.4);
     scene.add(haze);
     return {
       mesh: haze,
@@ -2441,11 +2444,11 @@
           scaleStage === "orbital" ||
           scaleStage === "solar" ||
           scaleStage === "cosmic";
-        // Stronger haze on surface, thin blue limb glow in orbit
-        let op = orbital ? 0.06 + (skyDark || 0) * 0.04 : 0.16;
-        if (scaleStage === "planetary") op = 0.12;
+        // Stronger green haze on surface; thin limb glow in orbit
+        let op = orbital ? 0.06 + (skyDark || 0) * 0.04 : 0.2;
+        if (scaleStage === "planetary") op = 0.16;
         mat.opacity = op;
-        mat.color.setHex(orbital ? 0x4ecbff : 0x3d6a9a);
+        mat.color.setHex(orbital ? 0x4ecbff : 0x5eead4);
         const sc = orbital ? 3.5 : 1.0;
         haze.scale.setScalar(sc);
       },
@@ -2516,58 +2519,60 @@
     const normal = getGroundNormal();
     normal.repeat.set(6, 6);
     normal.anisotropy = 8;
-    let em = 0x041018;
-    let emI = 0.08;
-    let rough = 0.9;
-    let metal = 0.06;
+    // Lifted emissives so albedo isn't crushed under ACES + fog
+    let em = 0x0a2840;
+    let emI = 0.22;
+    let rough = 0.88;
+    let metal = 0.04;
     let col = 0xffffff;
     let nScale = 0.9;
     if (biomeId === "emberVoid") {
-      em = 0x1a0800;
-      emI = 0.1;
-      rough = 0.95;
-      metal = 0.05;
+      em = 0x3a1808;
+      emI = 0.24;
+      rough = 0.92;
+      metal = 0.04;
       nScale = 1.05;
     } else if (biomeId === "whisperStars") {
-      em = 0x080818;
-      emI = 0.07;
-      rough = 0.9;
-      metal = 0.1;
+      em = 0x18183a;
+      emI = 0.2;
+      rough = 0.88;
+      metal = 0.08;
       nScale = 0.75;
     } else if (biomeId === "solarGold") {
-      em = 0x1c1408;
-      emI = 0.1;
-      rough = 0.86;
-      metal = 0.12;
+      em = 0x3a2810;
+      emI = 0.24;
+      rough = 0.84;
+      metal = 0.1;
       nScale = 0.95;
     } else if (biomeId === "frostGlacier") {
-      em = 0x0a1628;
-      emI = 0.11;
+      em = 0x1a3858;
+      emI = 0.26;
       rough = 0.48;
-      metal = 0.28;
-      col = 0xe8f4ff;
+      metal = 0.22;
+      col = 0xf0f8ff;
       nScale = 1.15;
     } else if (biomeId === "jadeCanopy") {
-      em = 0x061a12;
-      emI = 0.08;
-      rough = 0.92;
-      nScale = 0.85;
-    } else if (biomeId === "rosePulse") {
-      em = 0x1a0814;
-      emI = 0.09;
+      em = 0x145838;
+      emI = 0.32;
       rough = 0.88;
+      nScale = 0.85;
+      col = 0xe8fff0;
+    } else if (biomeId === "rosePulse") {
+      em = 0x3a1830;
+      emI = 0.22;
+      rough = 0.86;
       nScale = 0.9;
     } else {
-      metal = 0.1;
-      emI = 0.09;
+      metal = 0.06;
+      emI = 0.24;
       nScale = 0.95;
     }
     return new THREE.MeshStandardMaterial({
       map: map,
       bumpMap: bump,
-      bumpScale: 0.65,
+      bumpScale: 0.55,
       normalMap: normal,
-      normalScale: new THREE.Vector2(nScale, nScale),
+      normalScale: new THREE.Vector2(nScale * 0.85, nScale * 0.85),
       color: col,
       roughness: rough,
       metalness: metal,
@@ -2582,12 +2587,12 @@
     if (map.anisotropy != null) map.anisotropy = 8;
     return new THREE.MeshStandardMaterial({
       map: map,
-      color: 0xd8dce4,
-      roughness: biomeId === "emberVoid" ? 0.96 : biomeId === "frostGlacier" ? 0.5 : 0.88,
-      metalness: biomeId === "frostGlacier" ? 0.25 : 0.14,
+      color: 0xe8ecf2,
+      roughness: biomeId === "emberVoid" ? 0.94 : biomeId === "frostGlacier" ? 0.5 : 0.86,
+      metalness: biomeId === "frostGlacier" ? 0.22 : 0.1,
       flatShading: true,
-      emissive: biomeId === "emberVoid" ? 0x100500 : 0x050810,
-      emissiveIntensity: biomeId === "emberVoid" ? 0.15 : 0.06,
+      emissive: biomeId === "emberVoid" ? 0x281000 : 0x121828,
+      emissiveIntensity: biomeId === "emberVoid" ? 0.22 : 0.14,
     });
   }
 
@@ -2977,7 +2982,7 @@
       } else if (biomeId === "frostGlacier") {
         c0 = "#0e1824"; c1 = "#2a3e55"; vein = "rgba(140,180,210,0.35)";
       } else if (biomeId === "jadeCanopy") {
-        c0 = "#0a1810"; c1 = "#1a3020"; vein = "rgba(40,100,70,0.4)";
+        c0 = "#0e2418"; c1 = "#2a4a30"; vein = "rgba(60,140,90,0.5)";
       } else if (biomeId === "crystalNebula") {
         c0 = "#1a0e28"; c1 = "#2e1a48"; vein = "rgba(90,50,140,0.4)";
       } else {
@@ -3034,7 +3039,7 @@
       } else if (biomeId === "whisperStars") {
         base = ["#1e1b4b", "#4c1d95", "#7c3aed"]; speck = [196, 181, 253]; glow = "rgba(167,139,250,0.3)";
       } else if (biomeId === "jadeCanopy") {
-        base = ["#064e3b", "#059669", "#34d399"]; speck = [110, 231, 183]; glow = "rgba(52,211,153,0.3)";
+        base = ["#14532d", "#16a34a", "#4ade80"]; speck = [167, 243, 208]; glow = "rgba(74,222,128,0.42)";
       } else if (biomeId === "frostGlacier") {
         base = ["#0c4a6e", "#0369a1", "#7dd3fc"]; speck = [186, 230, 253]; glow = "rgba(125,211,252,0.3)";
       } else if (biomeId === "rosePulse") {
@@ -3183,13 +3188,14 @@
     const map = getFoliageTexture(biomeId);
     map.repeat.set(2, 2);
     // Soft form: low emissive so lobes sculpt under light (not neon balloons)
+    const isJade = biomeId === "jadeCanopy";
     const mat = new THREE.MeshStandardMaterial({
       map: map,
-      color: plantCol != null ? plantCol : 0xa78bfa,
-      roughness: 0.72,
-      metalness: biomeId === "crystalNebula" ? 0.18 : 0.06,
-      emissive: plantEm != null ? plantEm : 0x4c1d95,
-      emissiveIntensity: 0.22,
+      color: plantCol != null ? plantCol : isJade ? 0x86efac : 0xa78bfa,
+      roughness: isJade ? 0.62 : 0.72,
+      metalness: biomeId === "crystalNebula" ? 0.18 : isJade ? 0.04 : 0.06,
+      emissive: plantEm != null ? plantEm : isJade ? 0x22c55e : 0x4c1d95,
+      emissiveIntensity: isJade ? 0.38 : 0.22,
       transparent: true,
       opacity: 0.94,
       side: THREE.DoubleSide,
