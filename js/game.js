@@ -40,13 +40,7 @@
     }
     return;
   }
-  if (!window.BoltCitadel || !window.BoltCitadel.createCitadel) {
-    if (statusEl) {
-      statusEl.textContent = "Missing citadel.js — open the full bolt-engine folder.";
-      statusEl.style.color = "#f87171";
-    }
-    return;
-  }
+  // Citadel removed — open sprint only (no Thunderwolf fortress)
   // Audio is optional — game still runs if audio.js missing
   // (named Sfx — avoid clashing with browser global `Audio`)
   const Sfx = window.BoltAudio || null;
@@ -256,6 +250,7 @@
     }
     if (e.code === "Escape" && started) togglePause();
     if (e.code === "KeyH" && started && !paused) howl();
+    // R = recall to spawn (citadel removed)
     if (e.code === "KeyR" && started && !paused) recallToCitadel();
     if (e.code === "KeyL" && started) toggleDecreeLog();
     if (e.code === "KeyJ" && started) toggleQuestPanel();
@@ -799,8 +794,8 @@
     console.warn("graphics quality", qErr);
   }
   openWorld.ensureAround(0, 18);
-  // Soft landing pads near spawn (not world limits)
-  addCollider(0, 0, 16, openWorld.heightAt(0, 0) + 1, "citadel");
+  // Soft landing pad at spawn (citadel removed)
+  addCollider(0, 0, 12, openWorld.heightAt(0, 0) + 1, "spawn");
 
   const platMat = new THREE.MeshStandardMaterial({
     color: 0x243b6b,
@@ -863,31 +858,32 @@
     spawnBoost(b[0], h + 0.2 + b[1], b[2]);
   });
 
-  // Thunderwolf Citadel — living home fortress (Star Core lives in the chamber)
-  const citadel = window.BoltCitadel.createCitadel(scene, {
-    heightAt: function (x, z) {
-      return openWorld.heightAt(x, z);
+  // Citadel erased — lightweight home anchor (no fortress mesh)
+  const citadel = {
+    colliders: [],
+    coreRoot: null,
+    coreMain: null,
+    coreShell: null,
+    coreAura: null,
+    coreLight: null,
+    scale: 1,
+    getEntrance: function () {
+      const y = openWorld.heightAt(0, 14) + 1.2;
+      return { x: 0, y: y, z: 14 };
     },
-    coreStageIndex: 0,
-    resonance: 0,
-    decrees: 0,
-  });
-  // Register walkable floors
-  if (citadel.colliders) {
-    citadel.colliders.forEach(function (c) {
-      addCollider(c.x, c.z, c.half, c.y, "citadel");
-    });
-  }
-  // Aliases so existing Core stage / light code still works
-  const starCoreGroup = citadel.coreRoot || new THREE.Group();
-  const coreSphere = citadel.coreMain;
-  const coreShell = citadel.coreShell;
-  const coreAura = citadel.coreAura;
-  // Move world core light into citadel intensity control
-  if (citadel.coreLight) {
-    coreLight.intensity = 0.4; // soft fill; chamber light is primary
-    coreLight.position.set(0, citadel.getBaseY() + 14, -2);
-  }
+    getBaseY: function () {
+      return openWorld.heightAt(0, 0);
+    },
+    getHomeRadius: function () {
+      return 80;
+    },
+    setGrowth: function () {},
+    update: function () {},
+  };
+  const starCoreGroup = new THREE.Group();
+  const coreSphere = null;
+  const coreShell = null;
+  const coreAura = null;
 
   // Procedural world content (paths, ruins, flora, details) lives in BoltProcedural
 
@@ -925,11 +921,11 @@
   // Player (Bolt)
   // ---------------------------------------------------------------------------
   const player = new THREE.Group();
-  // Spawn at Citadel gates (south entrance) — face the fortress
+  // Spawn on open surface (no citadel)
   {
     const ent = citadel.getEntrance();
     player.position.set(ent.x, ent.y, ent.z);
-    yaw = Math.PI; // look into Citadel (-Z)
+    yaw = 0;
   }
 
   /**
@@ -4589,39 +4585,35 @@
     camera.fov = damp(camera.fov, targetFov, 6, dt);
     camera.updateProjectionMatrix();
 
-    ui.barSprint.style.width = THREE.MathUtils.clamp((speed / 40) * 100, 0, 100) + "%";
-    ui.barMomentum.style.width = state.momentum * 100 + "%";
-    ui.barIntention.style.width = state.intention * 100 + "%";
-    if (ui.barMeaningful) {
-      ui.barMeaningful.style.width = state.meaningfulScore * 100 + "%";
-      // Gate color: below threshold dim, above bright
-      ui.barMeaningful.style.opacity = state.meaningfulScore >= 0.65 ? "1" : "0.55";
+    // Minimal flow UI — Momentum bar only (Lightning Core aesthetic)
+    const m = THREE.MathUtils.clamp(state.momentum, 0, 1);
+    if (ui.barMomentum) {
+      ui.barMomentum.style.width = m * 100 + "%";
     }
-    ui.barCore.style.width = state.starCore + "%";
-    ui.barResonance.style.width = state.resonance * 100 + "%";
-    ui.valSpeed.textContent = speed.toFixed(1) + " u/s";
-    ui.valMomentum.textContent = Math.round(state.momentum * 100) + "%";
-    if (state.towardLandmark > 0.45 && state.nearestLandmark) {
-      const t = state.nearestLandmark.type || state.nearestLandmark.kind || "MARK";
-      ui.valIntention.textContent =
-        "→ " + String(t).toUpperCase().slice(0, 10);
-    } else {
-      ui.valIntention.textContent =
-        state.intention > 0.65 ? "PURPOSIVE" : state.intention > 0.3 ? "SEEKING" : "DRIFT";
+    if (hud) {
+      let flowState = "stillness";
+      if (m >= 0.9) flowState = "deep";
+      else if (m >= 0.75) flowState = "flow";
+      else if (m >= 0.5) flowState = "awakening";
+      hud.setAttribute("data-flow", flowState);
     }
-    if (ui.valMeaningful) {
-      const gate = state.meaningfulScore >= GATE_THRESHOLD ? "OPEN" : "GATE";
-      ui.valMeaningful.textContent = Math.round(state.meaningfulScore * 100) + "% " + gate;
-    }
-    ui.valCore.textContent = state.starCore.toFixed(0) + "%";
-    if (ui.valCoreStage) {
-      const cs = coreStageFromCharge(state.starCore);
-      ui.valCoreStage.textContent = cs.name;
-    }
-    ui.valResonance.textContent = Math.round(state.resonance * 100) + "%";
-
-    // Planet approach HUD (distance + ETA)
-    updatePlanetNavHud();
+    // Silent no-ops for removed telemetry (keep refs valid)
+    if (ui.barSprint) ui.barSprint.style.width = "0%";
+    if (ui.barIntention) ui.barIntention.style.width = "0%";
+    if (ui.barMeaningful) ui.barMeaningful.style.width = "0%";
+    if (ui.barCore) ui.barCore.style.width = "0%";
+    if (ui.barResonance) ui.barResonance.style.width = "0%";
+    if (ui.valSpeed) ui.valSpeed.textContent = "";
+    if (ui.valMomentum) ui.valMomentum.textContent = "";
+    if (ui.valIntention) ui.valIntention.textContent = "";
+    if (ui.valMeaningful) ui.valMeaningful.textContent = "";
+    if (ui.valCore) ui.valCore.textContent = "";
+    if (ui.valCoreStage) ui.valCoreStage.textContent = "";
+    if (ui.valResonance) ui.valResonance.textContent = "";
+    // Planet nav HUD removed from view (function still safe if elements missing)
+    try {
+      updatePlanetNavHud();
+    } catch (e) {}
 
     // Dedicated Scale Indicator (Surface → Planetary → Orbital…)
     if (ui.scaleBadge && ui.scaleBadgeName) {

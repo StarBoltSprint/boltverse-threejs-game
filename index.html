@@ -62,6 +62,9 @@
           <button id="boot-fs-btn" type="button" class="boot-btn-ghost" title="Fullscreen (F)">
             FULLSCREEN
           </button>
+          <a href="showcase-crystal-nebula.html" class="boot-btn-ghost" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;margin-top:0.5rem">
+            CRYSTAL NEBULA SHOWCASE
+          </a>
         </div>
 
         <div class="boot-foot">
@@ -77,111 +80,44 @@
     <span class="fs-fab-icon" aria-hidden="true">⛶</span>
   </button>
 
-  <div id="hud" class="hidden">
-    <div class="hud-top">
-      <div class="brand">BOLT ENGINE <span>v2.4 · HIGH</span></div>
-      <div id="scale-badge" class="scale-badge scale-paw" aria-live="polite">
-        <span class="scale-badge-label">SCALE</span>
-        <span class="scale-badge-name" id="scale-badge-name">PAW</span>
-        <span class="scale-badge-meta" id="scale-badge-meta">surface · dense</span>
-      </div>
-      <!-- Companion planet navigation — distance / time to land -->
-      <div id="planet-nav" class="planet-nav hidden" aria-live="polite">
-        <div class="planet-nav-label">TARGET WORLD</div>
-        <div class="planet-nav-name" id="planet-nav-name">—</div>
-        <div class="planet-nav-bar"><i id="planet-nav-fill"></i></div>
-        <div class="planet-nav-meta">
-          <span id="planet-nav-dist">—</span>
-          <span id="planet-nav-eta">—</span>
-        </div>
-        <div class="planet-nav-status" id="planet-nav-status">Sprint toward the beacon</div>
-      </div>
-      <div class="packet telemetry" id="packet">
-        <div class="telemetry-head">
-          <span class="telemetry-title">TELEMETRY</span>
-          <span class="telemetry-live" aria-hidden="true">● LIVE</span>
-        </div>
-        <div class="telemetry-primary">
-          <div class="meter meter-sprint">
-            <label>SPRINT</label>
-            <div class="bar"><i id="bar-sprint"></i></div>
-            <span id="val-speed">0</span>
-          </div>
-          <div class="meter meter-momentum">
-            <label>MOMENTUM</label>
-            <div class="bar"><i id="bar-momentum"></i></div>
-            <span id="val-momentum">0%</span>
-          </div>
-          <div class="meter meaningful">
-            <label>MEANINGFUL</label>
-            <div class="bar"><i id="bar-meaningful"></i></div>
-            <span id="val-meaningful">0%</span>
-          </div>
-          <div class="meter core" id="meter-core">
-            <label>STAR CORE <em id="val-core-stage">SPARK</em></label>
-            <div class="bar"><i id="bar-core"></i></div>
-            <span id="val-core">0%</span>
-          </div>
-        </div>
-        <div class="telemetry-secondary">
-          <div class="meter meter-compact">
-            <label>INTENTION</label>
-            <div class="bar"><i id="bar-intention"></i></div>
-            <span id="val-intention">—</span>
-          </div>
-          <div class="meter meter-compact meter-resonance">
-            <label>RESONANCE</label>
-            <div class="bar"><i id="bar-resonance"></i></div>
-            <span id="val-resonance">0%</span>
-          </div>
+  <!-- Flow-first HUD: single Lightning-Core Momentum bar (fades with deep flow) -->
+  <div id="hud" class="hidden" data-flow="stillness">
+    <div class="momentum-dock">
+      <div class="momentum-shell">
+        <span class="momentum-label">Momentum</span>
+        <div class="momentum-track" aria-label="Momentum">
+          <i id="bar-momentum" class="momentum-fill"></i>
+          <span class="momentum-glow" aria-hidden="true"></span>
         </div>
       </div>
     </div>
-    <div class="hud-bottom">
-      <div id="toast"></div>
-      <div id="gate-banner" class="gate-banner hidden"></div>
-      <div id="spawn-stats" class="spawn-stats"></div>
-      <div class="hint"><kbd>Click</kbd> look · Mouse orbit · Scroll zoom · <kbd>R</kbd> Recall · <kbd>F</kbd> Fullscreen · H howl</div>
-    </div>
-    <div id="crosshair"></div>
+    <!-- Hidden hooks kept so game.js null-checks don't need a full rewrite -->
+    <div id="toast" class="hud-hidden-hook"></div>
+    <div id="gate-banner" class="gate-banner hidden"></div>
+    <div id="spawn-stats" class="spawn-stats hud-hidden-hook"></div>
+    <div id="crosshair" class="hud-hidden-hook"></div>
     <div id="gate-flash" class="gate-flash"></div>
     <div id="pack-flash" class="pack-flash"></div>
-    <div id="landmark-markers" class="landmark-markers" aria-hidden="true"></div>
+    <div id="landmark-markers" class="landmark-markers hud-hidden-hook" aria-hidden="true"></div>
     <div id="pack-banner" class="pack-banner hidden"></div>
-
-    <!-- Active mini-quest -->
-    <aside id="quest-panel" class="quest-panel" aria-label="Active Quest">
-      <div class="quest-head">
-        <span class="quest-tag">DECREE QUEST</span>
-        <span id="quest-progress">0/1</span>
-      </div>
-      <div id="quest-title" class="quest-title">—</div>
-      <div id="quest-desc" class="quest-desc">Sprint with purpose to receive a quest.</div>
-      <div class="quest-bar"><i id="quest-bar"></i></div>
-    </aside>
-
-    <!-- Decree Log — Spiral-47 memory fragments -->
-    <aside id="decree-panel" class="decree-panel hidden" aria-label="Decree Log">
-      <div class="decree-head">
-        <h3>DECREE LOG</h3>
-        <span id="decree-count">0 / 0</span>
-        <button type="button" id="decree-close" class="decree-close" title="Close (L)">×</button>
-      </div>
-      <p class="decree-sub">Fragments of Spiral-47 history · recovered from ruins</p>
-      <ul id="decree-list" class="decree-list">
-        <li class="decree-empty">No decrees yet. Sprint with purpose. Touch ruins. Recover the past.</li>
-      </ul>
-    </aside>
-
-    <!-- Lifetime progress (save) -->
-    <aside id="progress-panel" class="progress-panel hidden" aria-label="Progress">
-      <div class="decree-head">
-        <h3>PACK MEMORY</h3>
-        <button type="button" id="progress-close" class="decree-close" title="Close (P)">×</button>
-      </div>
-      <p class="decree-sub">Spiral-47 remembers across runs · auto-saved</p>
-      <ul id="progress-list" class="progress-list"></ul>
-    </aside>
+    <div id="scale-badge" class="hud-hidden-hook"><span id="scale-badge-name"></span><span id="scale-badge-meta"></span></div>
+    <div id="planet-nav" class="hidden"><span id="planet-nav-name"></span><i id="planet-nav-fill"></i><span id="planet-nav-dist"></span><span id="planet-nav-eta"></span><span id="planet-nav-status"></span></div>
+    <i id="bar-sprint" class="hud-hidden-hook"></i>
+    <i id="bar-intention" class="hud-hidden-hook"></i>
+    <i id="bar-meaningful" class="hud-hidden-hook"></i>
+    <i id="bar-core" class="hud-hidden-hook"></i>
+    <i id="bar-resonance" class="hud-hidden-hook"></i>
+    <span id="val-speed" class="hud-hidden-hook"></span>
+    <span id="val-momentum" class="hud-hidden-hook"></span>
+    <span id="val-intention" class="hud-hidden-hook"></span>
+    <span id="val-meaningful" class="hud-hidden-hook"></span>
+    <span id="val-core" class="hud-hidden-hook"></span>
+    <span id="val-core-stage" class="hud-hidden-hook"></span>
+    <span id="val-resonance" class="hud-hidden-hook"></span>
+    <div id="meter-core" class="hud-hidden-hook"></div>
+    <aside id="quest-panel" class="hidden"></aside>
+    <aside id="decree-panel" class="hidden"><ul id="decree-list"></ul><span id="decree-count"></span><button id="decree-close" type="button"></button></aside>
+    <aside id="progress-panel" class="hidden"><ul id="progress-list"></ul><button id="progress-close" type="button"></button></aside>
   </div>
 
   <div id="pause" class="hidden">
@@ -199,7 +135,7 @@
         </div>
         <p class="gfx-tier-hint" id="pause-gfx-hint">Change anytime · saved for next run</p>
       </div>
-      <p class="pause-hint"><kbd>P</kbd> Pack Memory · <kbd>L</kbd> Decrees · Gate ≥65%</p>
+      <p class="pause-hint"><kbd>Esc</kbd> resume · <kbd>F</kbd> fullscreen · flow-first UI</p>
       <button id="resume-btn" type="button">RESUME SPRINT</button>
     </div>
   </div>
@@ -210,7 +146,7 @@
   <script src="js/three.min.js"></script>
   <script src="js/graphics.js"></script>
   <script src="js/audio.js"></script>
-  <script src="js/citadel.js"></script>
+  <!-- citadel.js removed — no Thunderwolf Citadel in open sprint -->
   <script src="js/procedural.js"></script>
   <script src="js/debris.js"></script>
   <script src="js/trail.js"></script>
